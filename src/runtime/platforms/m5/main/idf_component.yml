@@ -1,0 +1,9 @@
+## IDF Component Manager Manifest File
+dependencies:
+  wasm-micro-runtime:
+    version: "^2"
+    override_path: "../../../../../wasm-micro-runtime"
+  m5stack/m5unified:
+    version: "^0.2.7"
+  idf:
+    version: ">=4.4"

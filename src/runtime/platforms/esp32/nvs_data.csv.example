@@ -1,0 +1,11 @@
+key,type,encoding,value
+config,namespace,,
+sta_ssid,data,string,YOUR_SSID
+sta_pass,data,string,YOUR_PASSWORD
+ap_ssid,data,string,WaiotAP
+ap_pass,data,string,12345678
+sta_mode,data,u8,1
+device_name,data,string,my-esp32-device
+kubelet_ep,data,string,192.168.1.100:8080
+cpu_info,data,string,1
+memory_info,data,string,1Mi
