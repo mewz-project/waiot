@@ -396,3 +396,99 @@ int32_t log_read_from_oldest(uint32_t offset, uint8_t *out, uint32_t len)
     }
     return (int32_t)len;
 }
+
+// =====================================
+// WASI Preview1 Socket APIs
+// =====================================
+
+__wasi_errno_t waiot_sock_open(wasm_exec_env_t exec_env,
+                               __wasi_address_family_t family,
+                               __wasi_sock_type_t type,
+                               int32_t fd_addr)
+{
+    return 0;
+}
+
+__wasi_errno_t waiot_sock_bind(wasm_exec_env_t exec_env,
+                               __wasi_fd_t fd,
+                               int32_t ip_iovec_addr,
+                               int32_t port)
+{
+    return 0;
+}
+
+__wasi_errno_t waiot_sock_listen(wasm_exec_env_t exec_env,
+                                 __wasi_fd_t fd,
+                                 int32_t backlog)
+{
+    return 0;
+}
+
+__wasi_errno_t waiot_sock_accept(wasm_exec_env_t exec_env,
+                                 __wasi_fd_t fd,
+                                 int32_t new_fd_addr)
+{
+    return 0;
+}
+
+__wasi_errno_t waiot_sock_recv(wasm_exec_env_t exec_env,
+                               __wasi_fd_t fd,
+                               int32_t iovec_addr,
+                               int32_t buf_len,
+                               int32_t flags,
+                               int32_t recv_len_addr,
+                               int32_t oflags_addr)
+{
+    return 0;
+}
+
+__wasi_errno_t waiot_sock_send(wasm_exec_env_t exec_env,
+                               __wasi_fd_t fd,
+                               int32_t iovec_addr,
+                               int32_t iovec_count,
+                               int32_t flags,
+                               int32_t send_len_addr)
+{
+    return 0;
+}
+
+__wasi_errno_t waiot_sock_connect(wasm_exec_env_t exec_env,
+                                  __wasi_fd_t fd,
+                                  int32_t ip_iovec_addr,
+                                  int32_t port)
+{
+    return 0;
+}
+
+__wasi_errno_t waiot_sock_shutdown(wasm_exec_env_t exec_env,
+                                   __wasi_fd_t fd,
+                                   int32_t flag)
+{
+    return 0;
+}
+
+__wasi_errno_t waiot_sock_getpeeraddr(wasm_exec_env_t exec_env,
+                                      __wasi_fd_t fd,
+                                      int32_t ip_iovec_addr,
+                                      int32_t type_addr,
+                                      int32_t port_addr)
+{
+    return 0;
+}
+__wasi_errno_t waiot_sock_getlocaladdr(wasm_exec_env_t exec_env,
+                                       __wasi_fd_t fd,
+                                       int32_t ip_iovec_addr,
+                                       int32_t type_addr,
+                                       int32_t port_addr)
+{
+    return 0;
+}
+__wasi_errno_t waiot_sock_setsockopt(wasm_exec_env_t exec_env,
+                                     __wasi_fd_t fd,
+                                     int32_t level,
+                                     int32_t optname,
+                                     int32_t optval_addr,
+                                     int32_t optlen)
+{
+    return 0;
+}
