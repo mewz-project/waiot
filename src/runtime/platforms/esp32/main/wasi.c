@@ -4,6 +4,7 @@
 #include "driver/i2c.h"
 #include "driver/ledc.h"
 #include "esp_err.h"
+#include "esp_http_client.h"
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "pinmap.h"
@@ -395,4 +396,207 @@ int32_t log_read_from_oldest(uint32_t offset, uint8_t *out, uint32_t len)
         memcpy(out + chunk1, s_log_ring, len - chunk1);
     }
     return (int32_t)len;
+}
+
+// ====================== HTTP client ======================
+#define MAX_HTTP_HANDLES 8
+
+typedef enum
+{
+    HTTP_M_GET = 0,
+    HTTP_M_POST = 1,
+    HTTP_M_PUT = 2,
+    HTTP_M_DEL = 3,
+} wasm_http_method_t;
+
+typedef struct
+{
+    bool used;
+    esp_http_client_handle_t client;
+} http_slot_t;
+
+static http_slot_t g_http_slots[MAX_HTTP_HANDLES];
+static SemaphoreHandle_t g_http_lock;
+
+static int alloc_http_handle(esp_http_client_handle_t client)
+{
+    for (int i = 0; i < MAX_HTTP_HANDLES; i++)
+    {
+        if (!g_http_slots[i].used)
+        {
+            g_http_slots[i].used = true;
+            g_http_slots[i].client = client;
+            return i;
+        }
+    }
+    xSemaphoreGive(g_http_lock);
+    return -EMFILE;
+}
+
+static esp_http_client_handle_t get_client(int handle)
+{
+    if (handle < 0 || handle >= MAX_HTTP_HANDLES)
+        return NULL;
+    if (!g_http_slots[handle].used)
+        return NULL;
+    return g_http_slots[handle].client;
+}
+
+int32_t http_open(wasm_exec_env_t exec_env,
+                  int32_t method,
+                  int32_t url_ptr,
+                  int32_t url_len,
+                  int32_t timeout_ms)
+{
+    wasm_module_inst_t module = wasm_runtime_get_module_inst(exec_env);
+
+    if (!wasm_runtime_validate_app_addr(module, url_ptr, url_len))
+        return -EFAULT;
+
+    char url[256];
+    if (url_len >= sizeof(url))
+        return -ENAMETOOLONG;
+
+    memcpy(url,
+           wasm_runtime_addr_app_to_native(module, url_ptr),
+           url_len);
+    url[url_len] = '\0';
+
+    esp_http_client_config_t cfg = {
+        .url = url,
+        .timeout_ms = timeout_ms,
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client)
+        return -ENOMEM;
+
+    switch (method)
+    {
+    case HTTP_M_GET:
+        esp_http_client_set_method(client, HTTP_METHOD_GET);
+        break;
+    case HTTP_M_POST:
+        esp_http_client_set_method(client, HTTP_METHOD_POST);
+        break;
+    case HTTP_M_PUT:
+        esp_http_client_set_method(client, HTTP_METHOD_PUT);
+        break;
+    case HTTP_M_DEL:
+        esp_http_client_set_method(client, HTTP_METHOD_DELETE);
+        break;
+    default:
+        esp_http_client_cleanup(client);
+        return -EINVAL;
+    }
+
+    esp_err_t err = esp_http_client_open(client, 0);
+    if (err != ESP_OK)
+    {
+        esp_http_client_cleanup(client);
+        return -ECONNREFUSED;
+    }
+
+    return alloc_http_handle(client);
+}
+
+int32_t http_set_header(wasm_exec_env_t exec_env,
+                        int32_t handle,
+                        int32_t k_ptr, int32_t k_len,
+                        int32_t v_ptr, int32_t v_len)
+{
+    wasm_module_inst_t module = wasm_runtime_get_module_inst(exec_env);
+    esp_http_client_handle_t client = get_client(handle);
+    if (!client)
+        return -EBADF;
+
+    if (!wasm_runtime_validate_app_addr(module, k_ptr, k_len) ||
+        !wasm_runtime_validate_app_addr(module, v_ptr, v_len))
+        return -EFAULT;
+
+    char key[64], val[128];
+    if (k_len >= sizeof(key) || v_len >= sizeof(val))
+        return -ENAMETOOLONG;
+
+    memcpy(key, wasm_runtime_addr_app_to_native(module, k_ptr), k_len);
+    memcpy(val, wasm_runtime_addr_app_to_native(module, v_ptr), v_len);
+    key[k_len] = '\0';
+    val[v_len] = '\0';
+
+    esp_http_client_set_header(client, key, val);
+    return 0;
+}
+
+int32_t http_write(wasm_exec_env_t exec_env,
+                   int32_t handle,
+                   int32_t buf_ptr,
+                   int32_t buf_len)
+{
+    wasm_module_inst_t module = wasm_runtime_get_module_inst(exec_env);
+    esp_http_client_handle_t client = get_client(handle);
+    if (!client)
+        return -EBADF;
+
+    if (!wasm_runtime_validate_app_addr(module, buf_ptr, buf_len))
+        return -EFAULT;
+
+    const char *buf =
+        wasm_runtime_addr_app_to_native(module, buf_ptr);
+
+    int ret = esp_http_client_write(client, buf, buf_len);
+    return (ret >= 0) ? ret : -EIO;
+}
+
+int32_t http_read(wasm_exec_env_t exec_env,
+                  int32_t handle,
+                  int32_t buf_ptr,
+                  int32_t buf_len)
+{
+    wasm_module_inst_t module = wasm_runtime_get_module_inst(exec_env);
+    esp_http_client_handle_t client = get_client(handle);
+    if (!client)
+        return -EBADF;
+
+    if (!wasm_runtime_validate_app_addr(module, buf_ptr, buf_len))
+        return -EFAULT;
+
+    char *buf =
+        wasm_runtime_addr_app_to_native(module, buf_ptr);
+
+    int ret = esp_http_client_read(client, buf, buf_len);
+    return (ret >= 0) ? ret : -EIO;
+}
+
+int32_t http_status(wasm_exec_env_t exec_env, int32_t handle)
+{
+    esp_http_client_handle_t client = get_client(handle);
+    if (!client)
+        return -EBADF;
+
+    return esp_http_client_get_status_code(client);
+}
+
+int32_t http_close(wasm_exec_env_t exec_env, int32_t handle)
+{
+    if (handle < 0 || handle >= MAX_HTTP_HANDLES) {
+        return -EBADF;
+    }
+
+    xSemaphoreTake(g_http_lock, portMAX_DELAY);
+
+    if (!g_http_slots[handle].used)
+    {
+        xSemaphoreGive(g_http_lock);
+        return -EBADF;
+    }
+
+    esp_http_client_handle_t client = g_http_slots[handle].client;
+    g_http_slots[handle].used = false;
+    g_http_slots[handle].client = NULL;
+
+    xSemaphoreGive(g_http_lock);
+
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+    return 0;
 }

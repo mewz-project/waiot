@@ -37,3 +37,29 @@ fd_write(wasm_exec_env_t exec_env, int32_t fd, int32_t buf_iovec_addr,
 // Log ring buffer accessors for HTTP serving
 int32_t log_get_filled(void);
 int32_t log_read_from_oldest(uint32_t offset, uint8_t *out, uint32_t len);
+
+// HTTP client
+int32_t http_open(wasm_exec_env_t exec_env,
+                  int32_t method,
+                  int32_t url_ptr,
+                  int32_t url_len,
+                  int32_t timeout_ms);
+
+int32_t http_set_header(wasm_exec_env_t exec_env,
+                    int32_t handle,
+                    int32_t k_ptr, int32_t k_len,
+                    int32_t v_ptr, int32_t v_len);
+
+int32_t http_write(wasm_exec_env_t exec_env,
+                   int32_t handle,
+                   int32_t buf_ptr,
+                   int32_t buf_len);
+
+int32_t http_read(wasm_exec_env_t exec_env,
+                  int32_t handle,
+                  int32_t buf_ptr,
+                  int32_t buf_len);
+
+int32_t http_status(wasm_exec_env_t exec_env, int32_t handle);
+
+int32_t http_close(wasm_exec_env_t exec_env, int32_t handle);
