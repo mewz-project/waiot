@@ -446,7 +446,8 @@ int32_t http_open(wasm_exec_env_t exec_env,
                   int32_t method,
                   int32_t url_ptr,
                   int32_t url_len,
-                  int32_t timeout_ms)
+                  int32_t timeout_ms,
+                  int32_t content_len)
 {
     wasm_module_inst_t module = wasm_runtime_get_module_inst(exec_env);
 
@@ -454,8 +455,9 @@ int32_t http_open(wasm_exec_env_t exec_env,
         return -EFAULT;
 
     char url[256];
-    if (url_len >= sizeof(url))
+    if (url_len >= sizeof(url)) {
         return -ENAMETOOLONG;
+    }
 
     memcpy(url,
            wasm_runtime_addr_app_to_native(module, url_ptr),
@@ -468,8 +470,9 @@ int32_t http_open(wasm_exec_env_t exec_env,
     };
 
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
-    if (!client)
+    if (!client) {
         return -ENOMEM;
+    }
 
     switch (method)
     {
@@ -490,7 +493,7 @@ int32_t http_open(wasm_exec_env_t exec_env,
         return -EINVAL;
     }
 
-    esp_err_t err = esp_http_client_open(client, 0);
+    esp_err_t err = esp_http_client_open(client, content_len);
     if (err != ESP_OK)
     {
         esp_http_client_cleanup(client);
@@ -507,16 +510,19 @@ int32_t http_set_header(wasm_exec_env_t exec_env,
 {
     wasm_module_inst_t module = wasm_runtime_get_module_inst(exec_env);
     esp_http_client_handle_t client = get_client(handle);
-    if (!client)
+    if (!client) {
         return -EBADF;
+    }
 
     if (!wasm_runtime_validate_app_addr(module, k_ptr, k_len) ||
-        !wasm_runtime_validate_app_addr(module, v_ptr, v_len))
+        !wasm_runtime_validate_app_addr(module, v_ptr, v_len)) {
         return -EFAULT;
+    }
 
     char key[64], val[128];
-    if (k_len >= sizeof(key) || v_len >= sizeof(val))
+    if (k_len >= sizeof(key) || v_len >= sizeof(val)) {
         return -ENAMETOOLONG;
+    }
 
     memcpy(key, wasm_runtime_addr_app_to_native(module, k_ptr), k_len);
     memcpy(val, wasm_runtime_addr_app_to_native(module, v_ptr), v_len);
@@ -534,11 +540,13 @@ int32_t http_write(wasm_exec_env_t exec_env,
 {
     wasm_module_inst_t module = wasm_runtime_get_module_inst(exec_env);
     esp_http_client_handle_t client = get_client(handle);
-    if (!client)
+    if (!client) {
         return -EBADF;
+    }
 
-    if (!wasm_runtime_validate_app_addr(module, buf_ptr, buf_len))
+    if (!wasm_runtime_validate_app_addr(module, buf_ptr, buf_len)) {
         return -EFAULT;
+    }
 
     const char *buf =
         wasm_runtime_addr_app_to_native(module, buf_ptr);
@@ -554,11 +562,13 @@ int32_t http_read(wasm_exec_env_t exec_env,
 {
     wasm_module_inst_t module = wasm_runtime_get_module_inst(exec_env);
     esp_http_client_handle_t client = get_client(handle);
-    if (!client)
+    if (!client) {
         return -EBADF;
+    }
 
-    if (!wasm_runtime_validate_app_addr(module, buf_ptr, buf_len))
+    if (!wasm_runtime_validate_app_addr(module, buf_ptr, buf_len)) {
         return -EFAULT;
+    }
 
     char *buf =
         wasm_runtime_addr_app_to_native(module, buf_ptr);
@@ -570,8 +580,9 @@ int32_t http_read(wasm_exec_env_t exec_env,
 int32_t http_status(wasm_exec_env_t exec_env, int32_t handle)
 {
     esp_http_client_handle_t client = get_client(handle);
-    if (!client)
+    if (!client) {
         return -EBADF;
+    }
 
     return esp_http_client_get_status_code(client);
 }

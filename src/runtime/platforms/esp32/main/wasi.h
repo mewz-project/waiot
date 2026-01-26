@@ -43,8 +43,9 @@ int32_t http_open(wasm_exec_env_t exec_env,
                   int32_t method,
                   int32_t url_ptr,
                   int32_t url_len,
-                  int32_t timeout_ms);
-
+                  int32_t timeout_ms,
+                  int32_t content_len);
+                  
 int32_t http_set_header(wasm_exec_env_t exec_env,
                     int32_t handle,
                     int32_t k_ptr, int32_t k_len,
