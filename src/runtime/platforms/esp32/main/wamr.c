@@ -195,6 +195,14 @@ run_wamr()
     memcpy(wasm_file_buf, g_uploaded_data, g_uploaded_size);
     pthread_mutex_unlock(&g_wamr_thread_mu);
 
+    // init thread env
+    if (!wasm_runtime_init_thread_env())
+    {
+        ESP_LOGE(LOG_TAG, "Failed to init thread env");
+        goto done;
+    }
+    if_created_env = true;
+
     // load WASM module
     if (!(wasm_module = wasm_runtime_load(wasm_file_buf, wasm_file_buf_size,
                                           error_buf, sizeof(error_buf))))
@@ -205,14 +213,17 @@ run_wamr()
 
     // instantiate WASM module
     ESP_LOGI(LOG_TAG, "Instantiate WASM runtime");
+    pthread_mutex_lock(&g_wamr_thread_mu);
     if (!(wasm_module_inst =
               wasm_runtime_instantiate(wasm_module, 32 * 1024, // stack size
                                        32 * 1024,              // heap size
                                        error_buf, sizeof(error_buf))))
     {
         ESP_LOGE(LOG_TAG, "Error while instantiating: %s", error_buf);
+        pthread_mutex_unlock(&g_wamr_thread_mu);
         goto done;
     }
+    pthread_mutex_unlock(&g_wamr_thread_mu);
 
     // creating env is required for wasm_runtime_terminate
     wasm_exec_env_t exec_env = wasm_runtime_get_exec_env_singleton(wasm_module_inst);
@@ -222,13 +233,7 @@ run_wamr()
         goto done;
     }
 
-    if (!wasm_runtime_init_thread_env())
-    {
-        ESP_LOGE(LOG_TAG, "Failed to init thread env");
-        goto done;
-    }
-    if_created_env = true;
-
+    
     // run main()
     // Once wasm_runtime_terminate is call, this function returns at the next safe point.
     if (!wasm_application_execute_main(wasm_module_inst, 0, NULL))
@@ -295,20 +300,15 @@ void stop_current_wasm_instance()
 
 void launch_new_wasm_instance()
 {
+    stop_current_wasm_instance();
+
     pthread_attr_t tattr;
     pthread_attr_init(&tattr);
     pthread_attr_setstacksize(&tattr, IWASM_MAIN_STACK_SIZE);
 
-    // Join previous thread
-    pthread_mutex_lock(&g_wamr_thread_mu);
-    if (!atomic_load(&g_wamr_thread_running) && !atomic_load(&g_wamr_thread_joined))
-    {
-        pthread_join(thread_wamr, NULL);
-        atomic_store(&g_wamr_thread_joined, true);
-    }
-
     // Start the thread
     // Don't wait for finish because it may run forever.
+    pthread_mutex_lock(&g_wamr_thread_mu);
     atomic_store(&g_wamr_thread_joined, false);
     int res = pthread_create(&thread_wamr, &tattr, run_wamr, (void *)NULL);
     if (res != 0)
