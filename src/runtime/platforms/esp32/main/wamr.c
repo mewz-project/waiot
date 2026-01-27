@@ -16,12 +16,21 @@
 #include "esp_system.h"
 #include "esp_log.h"
 
+#include <stdatomic.h>
+#include <pthread.h>
+
+// Wasm binary upload buffer
 static uint8_t *g_uploaded_data = NULL;
 static size_t g_uploaded_size = 0;
-static uint8_t *wasm_file_buf = NULL;
 
+// WAMR module and instance
 wasm_module_inst_t wasm_module_inst = NULL;
 pthread_t thread_wamr;
+
+// Flags for thread management
+static atomic_bool g_wamr_thread_running = ATOMIC_VAR_INIT(false);
+static atomic_bool g_wamr_thread_joined = ATOMIC_VAR_INIT(true);
+static pthread_mutex_t g_wamr_thread_mu = PTHREAD_MUTEX_INITIALIZER;
 
 /* ===== Wasm ===== */
 static NativeSymbol i2c_syms[] = {
@@ -154,7 +163,11 @@ void init_wamr()
 void *
 run_wamr()
 {
+    atomic_store(&g_wamr_thread_running, true);
+
     unsigned wasm_file_buf_size = 0;
+    uint8_t *wasm_file_buf = NULL;
+
     wasm_module_t wasm_module = NULL;
     char error_buf[128];
     bool if_created_env = false;
@@ -163,9 +176,24 @@ run_wamr()
     print_free_heap();
 
     // TODO: Why Wasm binary is overwritten?
+    pthread_mutex_lock(&g_wamr_thread_mu);
+    if (!g_uploaded_data || g_uploaded_size == 0)
+    {
+        ESP_LOGE(LOG_TAG, "No Wasm binary uploaded");
+        pthread_mutex_unlock(&g_wamr_thread_mu);
+        goto done;
+    }
     wasm_file_buf_size = g_uploaded_size;
     wasm_file_buf = malloc(g_uploaded_size);
+    if (!wasm_file_buf)
+    {
+        ESP_LOGE(LOG_TAG, "Failed allocating %d bytes for Wasm binary",
+                 (int)g_uploaded_size);
+        pthread_mutex_unlock(&g_wamr_thread_mu);
+        goto done;
+    }
     memcpy(wasm_file_buf, g_uploaded_data, g_uploaded_size);
+    pthread_mutex_unlock(&g_wamr_thread_mu);
 
     // load WASM module
     if (!(wasm_module = wasm_runtime_load(wasm_file_buf, wasm_file_buf_size,
@@ -228,24 +256,41 @@ done:
         wasm_runtime_destroy_thread_env();
     }
     print_free_heap();
+
+    atomic_store(&g_wamr_thread_running, false);
     return NULL;
 }
 
 void stop_current_wasm_instance()
 {
+    pthread_t t_for_join = 0;
+    bool need_join = false;
+
+    pthread_mutex_lock(&g_wamr_thread_mu);
+
+    // Terminate the runtime if still running
     if (wasm_module_inst)
     {
         ESP_LOGW(LOG_TAG, "Terminating previous Wasm runtime…");
-        print_free_heap();
-
         wasm_runtime_terminate(wasm_module_inst);
-
-        // Wait for the previous thread to finish
-        pthread_join(thread_wamr, NULL);
-
-        ESP_LOGI(LOG_TAG, "Previous Wasm runtime terminated.");
-        print_free_heap();
     }
+
+    // Check if we need to join and keep the thread handle
+    if (!atomic_load(&g_wamr_thread_joined))
+    {
+        t_for_join = thread_wamr;
+        need_join = true;
+        atomic_store(&g_wamr_thread_joined, true);
+    }
+    pthread_mutex_unlock(&g_wamr_thread_mu);
+
+    // Join outside of mutex
+    if (need_join) {
+        pthread_join(t_for_join, NULL);
+        ESP_LOGI(LOG_TAG, "Previous Wasm runtime terminated/joined.");
+    }
+
+    print_free_heap();
 }
 
 void launch_new_wasm_instance()
@@ -254,10 +299,26 @@ void launch_new_wasm_instance()
     pthread_attr_init(&tattr);
     pthread_attr_setstacksize(&tattr, IWASM_MAIN_STACK_SIZE);
 
+    // Join previous thread
+    pthread_mutex_lock(&g_wamr_thread_mu);
+    if (!atomic_load(&g_wamr_thread_running) && !atomic_load(&g_wamr_thread_joined))
+    {
+        pthread_join(thread_wamr, NULL);
+        atomic_store(&g_wamr_thread_joined, true);
+    }
+
     // Start the thread
     // Don't wait for finish because it may run forever.
+    atomic_store(&g_wamr_thread_joined, false);
     int res = pthread_create(&thread_wamr, &tattr, run_wamr, (void *)NULL);
-    assert(res == 0);
+    if (res != 0)
+    {
+        ESP_LOGE(LOG_TAG, "Failed to create WAMR thread: %d", res);
+        atomic_store(&g_wamr_thread_joined, true);
+    }
+    
+    pthread_mutex_unlock(&g_wamr_thread_mu);
+    
     pthread_attr_destroy(&tattr);
 }
 
@@ -273,15 +334,7 @@ esp_err_t receive_wasm_binary(httpd_req_t *req)
         ESP_LOGW(LOG_TAG, "Upload too large: %d > %d", (int)req->content_len,
                  (int)REGISTER_MAX_UPLOAD_SIZE);
         return httpd_resp_send_err(req, HTTPD_413_CONTENT_TOO_LARGE,
-                                   "File too large");
-    }
-
-    // Cleanup previous wasm
-    if (g_uploaded_data)
-    {
-        free(g_uploaded_data);
-        g_uploaded_data = NULL;
-        g_uploaded_size = 0;
+                                    "File too large");
     }
 
     // Allocate buffer
@@ -312,19 +365,45 @@ esp_err_t receive_wasm_binary(httpd_req_t *req)
             ESP_LOGE(LOG_TAG, "httpd_req_recv failed: %d", r);
             free(buf);
             return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
-                                       "recv failed");
+                                      "recv failed");
         }
         offset += r;
         remaining -= r;
     }
     buf[offset] = 0;
 
+    // Lock mutex
+    pthread_mutex_lock(&g_wamr_thread_mu);
+    
+    int ret;
+    
+    // Assert if current Wasm instance is not running
+    if (is_wasm_instance_running()) {
+        ESP_LOGW(LOG_TAG, "Cannot receive Wasm binary: instance is running");
+        ret = httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                      "Wasm instance is running");
+        free(buf);
+        goto out;
+    }
+
+    // Cleanup previous wasm
+    if (g_uploaded_data)
+    {
+        free(g_uploaded_data);
+        g_uploaded_data = NULL;
+        g_uploaded_size = 0;
+    }
+
+    // Replace with new wasm
     g_uploaded_data = buf;
     g_uploaded_size = offset;
-    return ESP_OK;
+    ret = ESP_OK;
+out:
+    pthread_mutex_unlock(&g_wamr_thread_mu);
+    return ret;
 }
 
 bool is_wasm_instance_running()
 {
-    return wasm_module_inst != NULL;
+    return atomic_load(&g_wamr_thread_running);
 }
