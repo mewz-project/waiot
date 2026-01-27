@@ -151,31 +151,13 @@ void init_wamr()
 #endif // CONFIG_USE_TFLM
 }
 
-void cleanup_wamr()
-{
-    ESP_LOGI(LOG_TAG, "Cleanup WASM runtime");
-    print_free_heap();
-    if (wasm_module_inst)
-    {
-        ESP_LOGI("wamr", "before deinstantiate");
-        wasm_runtime_deinstantiate(wasm_module_inst);
-        wasm_module_inst = NULL;
-        free(wasm_file_buf);
-        ESP_LOGI("wamr", "after deinstantiate");
-    }
-    else
-    {
-        ESP_LOGE("wamr", "no module instance to deinstantiate");
-    }
-    print_free_heap();
-}
-
 void *
 run_wamr()
 {
     unsigned wasm_file_buf_size = 0;
     wasm_module_t wasm_module = NULL;
     char error_buf[128];
+    bool if_created_env = false;
 
     ESP_LOGI(LOG_TAG, "Run wamr with interpreter");
     print_free_heap();
@@ -185,14 +167,15 @@ run_wamr()
     wasm_file_buf = malloc(g_uploaded_size);
     memcpy(wasm_file_buf, g_uploaded_data, g_uploaded_size);
 
-    /* load WASM module */
+    // load WASM module
     if (!(wasm_module = wasm_runtime_load(wasm_file_buf, wasm_file_buf_size,
                                           error_buf, sizeof(error_buf))))
     {
         ESP_LOGE(LOG_TAG, "Error in wasm_runtime_load: %s", error_buf);
-        goto fail;
+        goto done;
     }
 
+    // instantiate WASM module
     ESP_LOGI(LOG_TAG, "Instantiate WASM runtime");
     if (!(wasm_module_inst =
               wasm_runtime_instantiate(wasm_module, 32 * 1024, // stack size
@@ -200,7 +183,7 @@ run_wamr()
                                        error_buf, sizeof(error_buf))))
     {
         ESP_LOGE(LOG_TAG, "Error while instantiating: %s", error_buf);
-        goto fail;
+        goto done;
     }
 
     // creating env is required for wasm_runtime_terminate
@@ -208,35 +191,43 @@ run_wamr()
     if (!exec_env)
     {
         ESP_LOGE(LOG_TAG, "Failed to get exec env");
-        goto fail;
+        goto done;
     }
 
-    bool ok = wasm_runtime_init_thread_env();
-    if (!ok)
+    if (!wasm_runtime_init_thread_env())
     {
         ESP_LOGE(LOG_TAG, "Failed to init thread env");
-        goto fail;
+        goto done;
     }
+    if_created_env = true;
 
     // run main()
     // Once wasm_runtime_terminate is call, this function returns at the next safe point.
-    ok = wasm_application_execute_main(wasm_module_inst, 0, NULL);
-    if (!ok)
+    if (!wasm_application_execute_main(wasm_module_inst, 0, NULL))
     {
         ESP_LOGE(LOG_TAG, "Failed to execute main()");
-        goto fail;
+        goto done;
     }
 
-    // Destroy thread environment
-    wasm_runtime_destroy_thread_env();
-
-    // Cleanup
-    cleanup_wamr();
-
-fail:
-    ESP_LOGI(LOG_TAG, "Unload WASM module");
-    wasm_runtime_unload(wasm_module);
-    cleanup_wamr();
+done:
+    if (wasm_module_inst)
+    {
+        wasm_runtime_deinstantiate(wasm_module_inst);
+        wasm_module_inst = NULL;
+    }
+    if (wasm_module) {
+        wasm_runtime_unload(wasm_module);
+        wasm_module = NULL;
+    }
+    if (wasm_file_buf) {
+        free(wasm_file_buf);
+        wasm_file_buf = NULL;
+    }
+    if (if_created_env)
+    {
+        wasm_runtime_destroy_thread_env();
+    }
+    print_free_heap();
     return NULL;
 }
 
@@ -261,7 +252,6 @@ void launch_new_wasm_instance()
 {
     pthread_attr_t tattr;
     pthread_attr_init(&tattr);
-    pthread_attr_setdetachstate(&tattr, PTHREAD_CREATE_DETACHED);
     pthread_attr_setstacksize(&tattr, IWASM_MAIN_STACK_SIZE);
 
     // Start the thread
