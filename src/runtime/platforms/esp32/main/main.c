@@ -585,6 +585,7 @@ void app_main(void)
 
     // Initialize WAMR
     init_wamr();
+    init_http_client();
 
     // Launch HTTP Server
     s_server = start_http_server();

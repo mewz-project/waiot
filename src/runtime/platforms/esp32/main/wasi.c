@@ -418,6 +418,11 @@ typedef struct
 static http_slot_t g_http_slots[MAX_HTTP_HANDLES];
 static SemaphoreHandle_t g_http_lock;
 
+void init_http_client(void)
+{
+    g_http_lock = xSemaphoreCreateMutex();
+}
+
 static int alloc_http_handle(esp_http_client_handle_t client)
 {
     for (int i = 0; i < MAX_HTTP_HANDLES; i++)
@@ -593,6 +598,9 @@ int32_t http_close(wasm_exec_env_t exec_env, int32_t handle)
         return -EBADF;
     }
 
+    if (g_http_lock == NULL) {
+        return -EBADF;
+    }
     xSemaphoreTake(g_http_lock, portMAX_DELAY);
 
     if (!g_http_slots[handle].used)
