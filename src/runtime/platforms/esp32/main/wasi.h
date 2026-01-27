@@ -53,10 +53,12 @@ int32_t http_set_header(wasm_exec_env_t exec_env,
                     int32_t k_ptr, int32_t k_len,
                     int32_t v_ptr, int32_t v_len);
 
+int32_t http_fetch_headers(wasm_exec_env_t exec_env, int32_t handle);
+
 int32_t http_write(wasm_exec_env_t exec_env,
-                   int32_t handle,
-                   int32_t buf_ptr,
-                   int32_t buf_len);
+                       int32_t handle,
+                       int32_t buf_ptr,
+                       int32_t buf_len);
 
 int32_t http_read(wasm_exec_env_t exec_env,
                   int32_t handle,

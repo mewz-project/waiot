@@ -1,67 +1,63 @@
 #![no_std]
 #![no_main]
 
-use core::panic::PanicInfo;
+use panic_halt as _;
+use embedded_hal::delay::DelayNs;
+use embedded_hal::digital::OutputPin as _;
+use embedded_hal_wasm::delay::WasmDelay;
+use embedded_hal_wasm::digital;
 
-use embedded_hal_wasm::http_client::{HttpClient, Method, Result};
-
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    loop {}
+#[link(wasm_import_module = "wasi_waiot:http_client")]
+unsafe extern "C" {
+    fn http_open(method: i32, url_ptr: i32, url_len: i32, timeout_ms: i32, content_len: i32) -> i32;
+    // fn http_set_header(handle: i32, k_ptr: i32, k_len: i32, v_ptr: i32, v_len: i32) -> i32;
+    fn http_fetch_headers(handle: i32) -> i32;
+    // fn http_write(handle: i32, buf_ptr: i32, buf_len: i32) -> i32;
+    fn http_read(handle: i32, buf_ptr: i32, buf_len: i32) -> i32;
+    // fn http_status(handle: i32) -> i32;
+    fn http_close(handle: i32) -> i32;
 }
 
-fn consume_received_chunk(_bytes: &[u8]) {
-}
+const BUF_SIZE: usize = 1024;
+static mut BUFFER: [u8; BUF_SIZE] = [0; BUF_SIZE];
 
-fn curl_example_com(buf: &mut [u8]) -> Result<()> {
-    let url = "http://example.com/";
-    let mut cli = HttpClient::open(Method::Get, url, 5_000, None)?;
-
-    let _ = cli.set_header("User-Agent", "wamr-wasm/0.1");
-
-    let _status = cli.status()?;
-
-    loop {
-        let n = cli.read_into(buf)?;
-        if n == 0 { break; }
-        consume_received_chunk(&buf[..n]);
-    }
-
-    cli.close()?;
-    Ok(())
-}
-
-fn post_to_10_0_0_1(buf: &mut [u8]) -> Result<()> {
-    let url = "http://10.0.0.1/";
-    let body = br#"{"hello":"world"}"#;
-
-    let mut cli = HttpClient::open(Method::Post, url, 5_000, Some(body.len()))?;
-
-    cli.set_header("Content-Type", "application/json")?;
-    let _ = cli.set_header("User-Agent", "wamr-wasm/0.1");
-
-    let _written = cli.write(body)?;
-    let _status = cli.status()?;
-
-    loop {
-        let n = cli.read_into(buf)?;
-        if n == 0 { break; }
-        consume_received_chunk(&buf[..n]);
-    }
-
-    cli.close()?;
-    Ok(())
+#[inline]
+fn ptr_len(s: &str) -> (i32, i32) {
+    (s.as_ptr() as i32, s.len() as i32)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn _start() -> i32 {
-    let mut buf = [0u8; 1024];
+pub extern "C" fn _start() -> () {
+    let mut pin = digital::WasmGpioPin::new(27).into_output();
+    let mut delay = WasmDelay;
 
-    if let Err(e) = curl_example_com(&mut buf) {
-        return e.0;
+    let duration_ns = 300_000_000;
+
+    for _ in 0..2 {
+        let _ = pin.set_high();
+        delay.delay_ns(duration_ns);
+        let _ = pin.set_low();
+        delay.delay_ns(duration_ns);
     }
-    if let Err(e) = post_to_10_0_0_1(&mut buf) {
-        return e.0;
+    let _ = pin.set_low();
+
+    // HTTP GET
+    let url = "http://example.com/";
+    let (uptr, ulen) = ptr_len(url);
+    let h = unsafe { http_open(0, uptr, ulen, 5_000, 0) };
+    unsafe { let _ = http_fetch_headers(h); };
+
+    // Read response
+    for _ in 0..4 {
+        unsafe { 
+            let p = (&raw mut BUFFER) as *mut [u8; BUF_SIZE] as *mut u8;
+            let n = http_read(h, p as i32, BUF_SIZE as i32);
+            if n <= 0 {
+                break;
+            }
+        };
     }
-    0
+    
+    // Close handle
+    let _res = unsafe {http_close(h)};        
 }
