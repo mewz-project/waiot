@@ -72,6 +72,11 @@ static NativeSymbol native_symbols[] = {
     {"http_close", (void *)http_close, "(i)i", NULL},
 };
 
+static NativeSymbol camera_symbols[] = {
+    {"camera_init", camera_init, "()i", NULL},
+    {"camera_get", camera_get, "(ii)i", NULL},
+};
+
 #if CONFIG_USE_TFLM
 static NativeSymbol wasi_nn_syms[] = {
     {"load", load, "(*ii*)i", NULL},
@@ -165,6 +170,14 @@ void init_wamr()
             (uint32_t)(sizeof(native_symbols) / sizeof(NativeSymbol))))
     {
         ESP_LOGE(LOG_TAG, "Failed to register HTTP client native symbols.");
+        return;
+    }
+
+    if (!wasm_runtime_register_natives(
+            "wasi_waiot:camera", camera_symbols,
+            (uint32_t)(sizeof(camera_symbols) / sizeof(NativeSymbol))))
+    {
+        ESP_LOGE(LOG_TAG, "Failed to register Camera native symbols.");
         return;
     }
 

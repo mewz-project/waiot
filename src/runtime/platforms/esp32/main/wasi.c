@@ -3,10 +3,12 @@
 #include "driver/gpio.h"
 #include "driver/i2c.h"
 #include "driver/ledc.h"
+#include "esp_camera.h"
 #include "esp_err.h"
+#include "esp_heap_caps.h"
 #include "esp_http_client.h"
-#include "esp_timer.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "pinmap.h"
 #include <string.h>
 
@@ -664,4 +666,150 @@ int32_t http_close(wasm_exec_env_t exec_env, int32_t handle)
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
     return 0;
+}
+
+// ====================== Camera ======================
+
+#define PWDN_GPIO_NUM -1
+#define RESET_GPIO_NUM -1
+#define XCLK_GPIO_NUM 4
+#define SIOD_GPIO_NUM 18
+#define SIOC_GPIO_NUM 23
+
+#define Y9_GPIO_NUM 36
+#define Y8_GPIO_NUM 37
+#define Y7_GPIO_NUM 38
+#define Y6_GPIO_NUM 39
+#define Y5_GPIO_NUM 35
+#define Y4_GPIO_NUM 14
+#define Y3_GPIO_NUM 13
+#define Y2_GPIO_NUM 34
+#define VSYNC_GPIO_NUM 5
+#define HREF_GPIO_NUM 27
+#define PCLK_GPIO_NUM 25
+
+static bool has_camera_initialized = false;
+
+static bool has_psram(void)
+{
+    return heap_caps_get_total_size(MALLOC_CAP_SPIRAM) > 0;
+}
+
+int32_t camera_init(wasm_exec_env_t exec_env)
+{
+    if (has_camera_initialized)
+    {
+        return ESP_OK;
+    }
+    has_camera_initialized = true;
+    gpio_config_t conf;
+    conf.mode = GPIO_MODE_INPUT;
+    conf.pull_up_en = GPIO_PULLUP_ENABLE;
+    conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    conf.intr_type = GPIO_INTR_DISABLE;
+    conf.pin_bit_mask = 1LL << 13;
+    gpio_config(&conf);
+    conf.pin_bit_mask = 1LL << 14;
+    gpio_config(&conf);
+
+    camera_config_t config = {
+        .pin_pwdn = PWDN_GPIO_NUM,
+        .pin_reset = RESET_GPIO_NUM,
+        .pin_xclk = XCLK_GPIO_NUM,
+        .pin_sccb_sda = SIOD_GPIO_NUM,
+        .pin_sccb_scl = SIOC_GPIO_NUM,
+        .pin_d7 = Y9_GPIO_NUM,
+        .pin_d6 = Y8_GPIO_NUM,
+        .pin_d5 = Y7_GPIO_NUM,
+        .pin_d4 = Y6_GPIO_NUM,
+        .pin_d3 = Y5_GPIO_NUM,
+        .pin_d2 = Y4_GPIO_NUM,
+        .pin_d1 = Y3_GPIO_NUM,
+        .pin_d0 = Y2_GPIO_NUM,
+
+        .pin_vsync = VSYNC_GPIO_NUM,
+        .pin_href = HREF_GPIO_NUM,
+        .pin_pclk = PCLK_GPIO_NUM,
+
+        .xclk_freq_hz = 20000000,
+        .ledc_timer = LEDC_TIMER_0,
+        .ledc_channel = LEDC_CHANNEL_0,
+
+        .pixel_format = PIXFORMAT_GRAYSCALE,
+        .frame_size = FRAMESIZE_96X96,
+        .jpeg_quality = 8,
+        .fb_count = 1,
+        .grab_mode = CAMERA_GRAB_WHEN_EMPTY
+    };
+
+    // Try to use PSRAM for frame buffer if available
+    if (has_psram())
+    {
+        config.fb_location = CAMERA_FB_IN_PSRAM;
+    }
+    else
+    {
+        config.fb_location = CAMERA_FB_IN_DRAM;
+        config.fb_count = 1;
+        ESP_LOGW("wasi", "PSRAM not found; lowering fb_count to 1");
+    }
+
+    esp_err_t err = esp_camera_init(&config);
+    if (err != ESP_OK)
+    {
+        ESP_LOGE("wasi", "Camera init failed: 0x%x", err);
+        return err;
+    }
+
+    return ESP_OK;
+}
+
+int32_t camera_get(wasm_exec_env_t exec_env, int32_t buf_ptr, int32_t buf_size)
+{
+    ESP_LOGI("wasi", "camera_get...");
+    camera_fb_t *fb = esp_camera_fb_get();
+    if (!fb)
+    {
+        ESP_LOGE("wasi", "Capture failed");
+        return -1;
+    }
+
+    ESP_LOGI("wasi", "Captured: size=%d bytes", fb->len);
+
+    // Check buffer size
+    if (buf_size < (int32_t)fb->len)
+    {
+        ESP_LOGE("wasi", "Buffer too small: %d < %d", buf_size, fb->len);
+        esp_camera_fb_return(fb);
+        return -1;
+    }
+
+    // Convert wasm pointer to native pointer
+    wasm_module_inst_t instance = wasm_runtime_get_module_inst(exec_env);
+    if (!instance)
+    {
+        ESP_LOGE("wasi", "camera_get: Failed to get module instance.");
+        esp_camera_fb_return(fb);
+        return -1;
+    }
+
+    if (!wasm_runtime_validate_app_addr(instance, buf_ptr, (uint32_t)fb->len))
+    {
+        ESP_LOGE("wasi", "camera_get: Invalid buffer address.");
+        esp_camera_fb_return(fb);
+        return -1;
+    }
+
+    uint8_t *buf = (uint8_t *)wasm_runtime_addr_app_to_native(instance, buf_ptr);
+    if (!buf)
+    {
+        ESP_LOGE("wasi", "camera_get: Failed to get native buffer pointer.");
+        esp_camera_fb_return(fb);
+        return -1;
+    }
+
+    // Copy frame buffer to user buffer
+    memcpy(buf, fb->buf, fb->len);
+    esp_camera_fb_return(fb);
+    return fb->len;
 }

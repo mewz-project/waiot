@@ -68,3 +68,8 @@ int32_t http_read(wasm_exec_env_t exec_env,
 int32_t http_status(wasm_exec_env_t exec_env, int32_t handle);
 
 int32_t http_close(wasm_exec_env_t exec_env, int32_t handle);
+
+// Camera
+int32_t camera_init(wasm_exec_env_t exec_env);
+
+int32_t camera_get(wasm_exec_env_t exec_env, int32_t buf_ptr, int32_t buf_size);
