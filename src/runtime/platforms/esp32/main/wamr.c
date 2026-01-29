@@ -26,7 +26,6 @@ static size_t g_uploaded_size = 0;
 
 // WAMR module and instance
 wasm_module_inst_t wasm_module_inst = NULL;
-wasm_module_t wasm_module = NULL;
 pthread_t thread_wamr;
 
 // Flags for thread management

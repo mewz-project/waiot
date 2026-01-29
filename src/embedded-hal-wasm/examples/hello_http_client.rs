@@ -2,10 +2,8 @@
 #![no_main]
 
 use panic_halt as _;
-use embedded_hal::delay::DelayNs;
-use embedded_hal::digital::OutputPin as _;
-use embedded_hal_wasm::delay::WasmDelay;
-use embedded_hal_wasm::digital;
+
+// use embedded_hal_wasm::println;
 
 #[link(wasm_import_module = "wasi_waiot:http_client")]
 unsafe extern "C" {
@@ -28,21 +26,9 @@ fn ptr_len(s: &str) -> (i32, i32) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> () {
-    let mut pin = digital::WasmGpioPin::new(27).into_output();
-    let mut delay = WasmDelay;
-
-    let duration_ns = 300_000_000;
-
-    for _ in 0..2 {
-        let _ = pin.set_high();
-        delay.delay_ns(duration_ns);
-        let _ = pin.set_low();
-        delay.delay_ns(duration_ns);
-    }
-    let _ = pin.set_low();
-
     // HTTP GET
     let url = "http://example.com/";
+    // println!("HTTP GET: {}", url);
     let (uptr, ulen) = ptr_len(url);
     let h = unsafe { http_open(0, uptr, ulen, 5_000, 0) };
     unsafe { let _ = http_fetch_headers(h); };
@@ -52,6 +38,9 @@ pub extern "C" fn _start() -> () {
         unsafe { 
             let p = (&raw mut BUFFER) as *mut [u8; BUF_SIZE] as *mut u8;
             let n = http_read(h, p as i32, BUF_SIZE as i32);
+            // let slice = core::slice::from_raw_parts(p, n as usize);
+            // let s = core::str::from_utf8_unchecked(slice);
+            // println!("HTTP response: {}", s);
             if n <= 0 {
                 break;
             }

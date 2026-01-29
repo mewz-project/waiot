@@ -578,90 +578,90 @@ int32_t http_write(wasm_exec_env_t exec_env,
                        int32_t handle,
                        int32_t buf_ptr,
                        int32_t buf_len)
+{
+    wasm_module_inst_t module = wasm_runtime_get_module_inst(exec_env);
+    esp_http_client_handle_t client = get_client(handle);
+    if (!client)
     {
-        wasm_module_inst_t module = wasm_runtime_get_module_inst(exec_env);
-        esp_http_client_handle_t client = get_client(handle);
-        if (!client)
-        {
-            return -EBADF;
-        }
-
-        if (!wasm_runtime_validate_app_addr(module, buf_ptr, buf_len))
-        {
-            return -EFAULT;
-        }
-
-        const char *buf =
-            wasm_runtime_addr_app_to_native(module, buf_ptr);
-
-        int ret = esp_http_client_write(client, buf, buf_len);
-        return (ret >= 0) ? ret : -EIO;
+        return -EBADF;
     }
 
-    int32_t http_read(wasm_exec_env_t exec_env,
-                      int32_t handle,
-                      int32_t buf_ptr,
-                      int32_t buf_len)
+    if (!wasm_runtime_validate_app_addr(module, buf_ptr, buf_len))
     {
-        wasm_module_inst_t module = wasm_runtime_get_module_inst(exec_env);
-        esp_http_client_handle_t client = get_client(handle);
-        if (!client)
-        {
-            return -EBADF;
-        }
-
-        if (!wasm_runtime_validate_app_addr(module, buf_ptr, buf_len))
-        {
-            return -EFAULT;
-        }
-
-        char *buf =
-            wasm_runtime_addr_app_to_native(module, buf_ptr);
-
-        int ret = esp_http_client_read(client, buf, buf_len);
-        ESP_LOGI("WASI_HTTP", "http_read: handle=%d, buf_ptr=0x%08x, buf_len=%d => read=%d",
-                 handle, buf_ptr, buf_len, ret);
-        ESP_LOGI("WASI_HTTP", "Data: %.*s", ret, buf);
-        return (ret >= 0) ? ret : -EIO;
+        return -EFAULT;
     }
 
-    int32_t http_status(wasm_exec_env_t exec_env, int32_t handle)
-    {
-        esp_http_client_handle_t client = get_client(handle);
-        if (!client)
-        {
-            return -EBADF;
-        }
+    const char *buf =
+        wasm_runtime_addr_app_to_native(module, buf_ptr);
 
-        return esp_http_client_get_status_code(client);
+    int ret = esp_http_client_write(client, buf, buf_len);
+    return (ret >= 0) ? ret : -EIO;
+}
+
+int32_t http_read(wasm_exec_env_t exec_env,
+                    int32_t handle,
+                    int32_t buf_ptr,
+                    int32_t buf_len)
+{
+    wasm_module_inst_t module = wasm_runtime_get_module_inst(exec_env);
+    esp_http_client_handle_t client = get_client(handle);
+    if (!client)
+    {
+        return -EBADF;
     }
 
-    int32_t http_close(wasm_exec_env_t exec_env, int32_t handle)
+    if (!wasm_runtime_validate_app_addr(module, buf_ptr, buf_len))
     {
-        if (handle < 0 || handle >= MAX_HTTP_HANDLES)
-        {
-            return -EBADF;
-        }
+        return -EFAULT;
+    }
 
-        if (g_http_lock == NULL)
-        {
-            return -EBADF;
-        }
-        xSemaphoreTake(g_http_lock, portMAX_DELAY);
+    char *buf =
+        wasm_runtime_addr_app_to_native(module, buf_ptr);
 
-        if (!g_http_slots[handle].used)
-        {
-            xSemaphoreGive(g_http_lock);
-            return -EBADF;
-        }
+    int ret = esp_http_client_read(client, buf, buf_len);
+    ESP_LOGI("WASI_HTTP", "http_read: handle=%d, buf_ptr=0x%08x, buf_len=%d => read=%d",
+                handle, buf_ptr, buf_len, ret);
+    ESP_LOGI("WASI_HTTP", "Data: %.*s", ret, buf);
+    return (ret >= 0) ? ret : -EIO;
+}
 
-        esp_http_client_handle_t client = g_http_slots[handle].client;
-        g_http_slots[handle].used = false;
-        g_http_slots[handle].client = NULL;
+int32_t http_status(wasm_exec_env_t exec_env, int32_t handle)
+{
+    esp_http_client_handle_t client = get_client(handle);
+    if (!client)
+    {
+        return -EBADF;
+    }
 
+    return esp_http_client_get_status_code(client);
+}
+
+int32_t http_close(wasm_exec_env_t exec_env, int32_t handle)
+{
+    if (handle < 0 || handle >= MAX_HTTP_HANDLES)
+    {
+        return -EBADF;
+    }
+
+    if (g_http_lock == NULL)
+    {
+        return -EBADF;
+    }
+    xSemaphoreTake(g_http_lock, portMAX_DELAY);
+
+    if (!g_http_slots[handle].used)
+    {
         xSemaphoreGive(g_http_lock);
-
-        esp_http_client_close(client);
-        esp_http_client_cleanup(client);
-        return 0;
+        return -EBADF;
     }
+
+    esp_http_client_handle_t client = g_http_slots[handle].client;
+    g_http_slots[handle].used = false;
+    g_http_slots[handle].client = NULL;
+
+    xSemaphoreGive(g_http_lock);
+
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+    return 0;
+}
