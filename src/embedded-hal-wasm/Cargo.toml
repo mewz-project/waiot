@@ -9,5 +9,6 @@ embedded-hal = "1.0.0"
 embedded-sht3x = "0.1.0"
 heapless = { version = "0.8", features = ["ufmt"] }
 panic-halt = "1.0.0"
+spin = "0.10.0"
 ufmt = "0.2.0"
 ufmt_float = "0.2.0"

@@ -1,4 +1,4 @@
-#[link(wasm_import_module = "wasi:camera/camera")]
+#[link(wasm_import_module = "wasi_waiot:camera")]
 unsafe extern "C" {
     fn camera_init() -> i32;
     fn camera_get(buf_ptr: i32, buf_size: i32) -> i32;

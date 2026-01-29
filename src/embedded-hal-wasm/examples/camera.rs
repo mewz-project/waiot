@@ -2,23 +2,34 @@
 #![no_main]
 
 use panic_halt as _;
+use spin::Mutex;
 
 use embedded_hal_wasm::esp::Camera;
+use embedded_hal_wasm::http_client::{HttpClient, Method};
 
-const BUF_SIZE: usize = 48 * 1024;
+use embedded_hal::delay::DelayNs;
+use embedded_hal_wasm::delay::WasmDelay;
 
-#[link(wasm_import_module = "wasi:clock/mono")]
-unsafe extern "C" {
-    fn sleep(ns: i64) -> i32;
-}
+const BUF_SIZE: usize = 10 * 1024;
+static BUFFER: Mutex<[u8; BUF_SIZE]> = Mutex::new([0; BUF_SIZE]);
+
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> () {
-    let camera = Camera::init().unwrap();   
-    let mut buffer = [0u8; BUF_SIZE];
+    let camera = match Camera::init() {
+        Ok(cam) => cam,
+        Err(_) => {
+            return;
+        }
+    }; 
 
-    loop {
-        match camera.get(&mut buffer) {
+    let mut delay = WasmDelay;
+    let duration_ns = 1_000_000_000;
+
+    for _ in 0..5 {
+        let mut guard = BUFFER.lock();
+        let buffer: &mut [u8] = &mut *guard;
+        match camera.get(buffer) {
             Ok(_n) =>  {
                 // Here you can process the image data in `buffer`
                 // n is the number of bytes written into buffer
@@ -27,9 +38,7 @@ pub extern "C" fn _start() -> () {
                 return;
             }
         };
-
-        unsafe {
-            sleep(1_000_000_000);
-        }
+        drop(guard);
+        delay.delay_ns(duration_ns);
     }
 }
