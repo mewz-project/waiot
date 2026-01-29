@@ -2,6 +2,7 @@
 
 pub mod delay;
 pub mod digital;
+pub mod http_client;
 pub mod i2c;
 pub mod ledc;
 pub mod logging;

@@ -15,6 +15,7 @@
 #include "esp_heap_caps.h"
 #include "esp_system.h"
 #include "esp_log.h"
+#include "mbedtls/sha256.h"
 
 #include <stdatomic.h>
 #include <pthread.h>
@@ -59,6 +60,16 @@ static NativeSymbol pwm_syms[] = {
 
 static NativeSymbol wasi_snapshot_preview1_syms[] = {
     {"fd_write", fd_write, "(iiii)i", NULL},
+};
+
+static NativeSymbol native_symbols[] = {
+    {"http_open", (void *)http_open, "(iiiii)i", NULL},
+    {"http_set_header", (void *)http_set_header, "(iiiii)i", NULL},
+    {"http_fetch_headers", (void *)http_fetch_headers, "(i)i", NULL},
+    {"http_write", (void *)http_write, "(iii)i", NULL},
+    {"http_read", (void *)http_read, "(iii)i", NULL},
+    {"http_status", (void *)http_status, "(i)i", NULL},
+    {"http_close", (void *)http_close, "(i)i", NULL},
 };
 
 #if CONFIG_USE_TFLM
@@ -146,6 +157,14 @@ void init_wamr()
             (uint32_t)(sizeof(wasi_snapshot_preview1_syms) / sizeof(NativeSymbol))))
     {
         ESP_LOGE(LOG_TAG, "Failed to register WASI fd_write native symbol.");
+        return;
+    }
+
+    if (!wasm_runtime_register_natives(
+            "wasi_waiot:http_client", native_symbols,
+            (uint32_t)(sizeof(native_symbols) / sizeof(NativeSymbol))))
+    {
+        ESP_LOGE(LOG_TAG, "Failed to register HTTP client native symbols.");
         return;
     }
 
@@ -238,7 +257,8 @@ run_wamr()
     // Once wasm_runtime_terminate is call, this function returns at the next safe point.
     if (!wasm_application_execute_main(wasm_module_inst, 0, NULL))
     {
-        ESP_LOGE(LOG_TAG, "Failed to execute main()");
+        ESP_LOGE(LOG_TAG, "Failed to execute main(): %s",
+                 wasm_runtime_get_exception(wasm_module_inst));
         goto done;
     }
 
