@@ -1,7 +1,7 @@
-use core::fmt;
+// use core::fmt;
 
 #[repr(i32)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone)]
 pub enum Method {
     Get = 0,
     Post = 1,
@@ -9,14 +9,14 @@ pub enum Method {
     Delete = 3,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub struct HostError(pub i32);
 
-impl fmt::Display for HostError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "HostError({})", self.0)
-    }
-}
+// impl fmt::Display for HostError {
+//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+//         write!(f, "HostError({})", self.0)
+//     }
+// }
 
 pub type Result<T> = core::result::Result<T, HostError>;
 
@@ -24,6 +24,7 @@ pub type Result<T> = core::result::Result<T, HostError>;
 unsafe extern "C" {
     fn http_open(method: i32, url_ptr: i32, url_len: i32, timeout_ms: i32, content_len: i32) -> i32;
     fn http_set_header(handle: i32, k_ptr: i32, k_len: i32, v_ptr: i32, v_len: i32) -> i32;
+    fn http_fetch_headers(handle: i32) -> i32;
     fn http_write(handle: i32, buf_ptr: i32, buf_len: i32) -> i32;
     fn http_read(handle: i32, buf_ptr: i32, buf_len: i32) -> i32;
     fn http_status(handle: i32) -> i32;
@@ -52,11 +53,12 @@ pub struct HttpClient {
 /// A wrapper for HTTP client on ESP-IDF platform.
 /// `close` is called automatically when dropped.
 impl HttpClient {
-    pub fn open(method: Method, url: &str, timeout_ms: i32, content_len: Option<usize>) -> Result<Self> {
+    /// Open a new HTTP connection.
+    /// content_len: set to 0 for no body
+    pub fn open(method: Method, url: &str, timeout_ms: i32, content_len: i32) -> Result<Self> {
         let (uptr, ulen) = ptr_len(url);
-        let clen = content_len.map(|n| n as i32).unwrap_or(0);
 
-        let h = unsafe { http_open(method as i32, uptr, ulen, timeout_ms, clen) };
+        let h = unsafe { http_open(method as i32, uptr, ulen, timeout_ms, content_len) };
         if h < 0 { return Err(HostError(h)); }
         Ok(Self { handle: h })
     }
@@ -65,6 +67,11 @@ impl HttpClient {
         let (kptr, klen) = ptr_len(key);
         let (vptr, vlen) = ptr_len(val);
         ok_or_err(unsafe { http_set_header(self.handle, kptr, klen, vptr, vlen) })?;
+        Ok(())
+    }
+
+    pub fn fetch_headers(&mut self) -> Result<()> {
+        ok_or_err(unsafe { http_fetch_headers(self.handle) })?;
         Ok(())
     }
 
