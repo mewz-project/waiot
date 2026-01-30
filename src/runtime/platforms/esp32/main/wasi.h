@@ -70,6 +70,8 @@ int32_t http_status(wasm_exec_env_t exec_env, int32_t handle);
 int32_t http_close(wasm_exec_env_t exec_env, int32_t handle);
 
 // Camera
-int32_t camera_init(wasm_exec_env_t exec_env);
+int32_t if_camera_config_changed(wasm_exec_env_t exec_env, int pixel_format, int frame_size, int jpeg_quality);
+
+int32_t camera_init(wasm_exec_env_t exec_env, int pixel_format, int frame_size, int jpeg_quality);
 
 int32_t camera_get(wasm_exec_env_t exec_env, int32_t buf_ptr, int32_t buf_size);

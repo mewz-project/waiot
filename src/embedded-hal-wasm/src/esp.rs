@@ -1,7 +1,8 @@
 #[link(wasm_import_module = "wasi_waiot:camera")]
 unsafe extern "C" {
-    fn camera_init() -> i32;
+    fn camera_init(pixel_format: i32, frame_size: i32, jpeg_quality: i32) -> i32;
     fn camera_get(buf_ptr: i32, buf_size: i32) -> i32;
+    fn if_camera_config_changed(pixel_format: i32, frame_size: i32, jpeg_quality: i32) -> i32;
 }
 
 #[repr(i32)]
@@ -53,9 +54,15 @@ pub type Result<T> = core::result::Result<T, i32>;
 pub struct Camera;
 
 impl Camera {
-    pub fn init() -> Result<Self> {
+    pub fn init(pixel_format: PixelFormat, frame_size: FrameSize, jpeg_quality: i32) -> Result<Self> {
+        // Check if the configuration has changed
+        if unsafe { if_camera_config_changed(pixel_format as i32, frame_size as i32, jpeg_quality) } == 0 {
+            return Ok(Self);
+        }
+        
+        // If changed, initialize the camera
         unsafe { 
-            let ret = camera_init();
+            let ret = camera_init(pixel_format as i32, frame_size as i32, jpeg_quality);
             if ret < 0 {
                 return Err(ret);
             }

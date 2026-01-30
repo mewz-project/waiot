@@ -73,8 +73,9 @@ static NativeSymbol native_symbols[] = {
 };
 
 static NativeSymbol camera_symbols[] = {
-    {"camera_init", camera_init, "()i", NULL},
+    {"camera_init", camera_init, "(iii)i", NULL},
     {"camera_get", camera_get, "(ii)i", NULL},
+    {"if_camera_config_changed", if_camera_config_changed, "(iii)i", NULL},
 };
 
 #if CONFIG_USE_TFLM

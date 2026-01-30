@@ -689,28 +689,40 @@ int32_t http_close(wasm_exec_env_t exec_env, int32_t handle)
 #define PCLK_GPIO_NUM 25
 
 static bool has_camera_initialized = false;
+static int current_pixel_format = -1;
+static int current_frame_size = -1;
+static int current_jpeg_quality = -1;
 
 static bool has_psram(void)
 {
     return heap_caps_get_total_size(MALLOC_CAP_SPIRAM) > 0;
 }
 
-int32_t camera_init(wasm_exec_env_t exec_env)
+int32_t if_camera_config_changed(wasm_exec_env_t exec_env, int pixel_format, int frame_size, int jpeg_quality)
+{
+    if (has_camera_initialized &&
+        current_pixel_format == pixel_format &&
+        current_frame_size == frame_size &&
+        current_jpeg_quality == jpeg_quality)
+    {
+        return 0; // No change
+    }
+    return 1; // Config changed
+}
+
+int32_t camera_init(wasm_exec_env_t exec_env, int pixel_format, int frame_size, int jpeg_quality)
 {
     if (has_camera_initialized)
     {
-        return ESP_OK;
+        esp_camera_deinit();
     }
+
+    ESP_LOGI("wasi", "camera_init: pixel_format=%d, frame_size=%d, jpeg_quality=%d",
+             pixel_format, frame_size, jpeg_quality);
     has_camera_initialized = true;
-    gpio_config_t conf;
-    conf.mode = GPIO_MODE_INPUT;
-    conf.pull_up_en = GPIO_PULLUP_ENABLE;
-    conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    conf.intr_type = GPIO_INTR_DISABLE;
-    conf.pin_bit_mask = 1LL << 13;
-    gpio_config(&conf);
-    conf.pin_bit_mask = 1LL << 14;
-    gpio_config(&conf);
+    current_pixel_format = pixel_format;
+    current_frame_size = frame_size;
+    current_jpeg_quality = jpeg_quality;
 
     camera_config_t config = {
         .pin_pwdn = PWDN_GPIO_NUM,
@@ -735,12 +747,11 @@ int32_t camera_init(wasm_exec_env_t exec_env)
         .ledc_timer = LEDC_TIMER_0,
         .ledc_channel = LEDC_CHANNEL_0,
 
-        .pixel_format = PIXFORMAT_GRAYSCALE,
-        .frame_size = FRAMESIZE_96X96,
-        .jpeg_quality = 8,
+        .pixel_format = pixel_format,
+        .frame_size = frame_size,
+        .jpeg_quality = jpeg_quality,
         .fb_count = 1,
-        .grab_mode = CAMERA_GRAB_WHEN_EMPTY
-    };
+        .grab_mode = CAMERA_GRAB_WHEN_EMPTY};
 
     // Try to use PSRAM for frame buffer if available
     if (has_psram())
@@ -753,6 +764,9 @@ int32_t camera_init(wasm_exec_env_t exec_env)
         config.fb_count = 1;
         ESP_LOGW("wasi", "PSRAM not found; lowering fb_count to 1");
     }
+
+    gpio_set_direction((gpio_num_t)13, GPIO_MODE_INPUT);
+    gpio_set_direction((gpio_num_t)14, GPIO_MODE_INPUT);
 
     esp_err_t err = esp_camera_init(&config);
     if (err != ESP_OK)
@@ -767,6 +781,12 @@ int32_t camera_init(wasm_exec_env_t exec_env)
 int32_t camera_get(wasm_exec_env_t exec_env, int32_t buf_ptr, int32_t buf_size)
 {
     ESP_LOGI("wasi", "camera_get...");
+    if (!has_camera_initialized)
+    {
+        ESP_LOGE("wasi", "Camera not initialized");
+        return -1;
+    }
+
     camera_fb_t *fb = esp_camera_fb_get();
     if (!fb)
     {
@@ -810,6 +830,15 @@ int32_t camera_get(wasm_exec_env_t exec_env, int32_t buf_ptr, int32_t buf_size)
 
     // Copy frame buffer to user buffer
     memcpy(buf, fb->buf, fb->len);
+    const int len = fb->len;
+
+    ESP_LOGI("wasi", "camera_get: copied %d bytes to wasm buffer at 0x%08x",
+             fb->len, buf_ptr);
+    ESP_LOGI("wasi", "  %02x %02x %02x %02x %02x %02x %02x %02x ... %02x %02x",
+             buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7], buf[len - 2], buf[len - 1]);
+    ESP_LOGI("wasi", "  %02x %02x %02x %02x %02x %02x %02x %02x ... %02x %02x",
+             fb->buf[0], fb->buf[1], fb->buf[2], fb->buf[3], fb->buf[4], fb->buf[5], fb->buf[6], fb->buf[7], fb->buf[len - 2], fb->buf[len - 1]);
+
     esp_camera_fb_return(fb);
-    return fb->len;
+    return len;
 }
