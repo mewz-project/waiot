@@ -3,7 +3,7 @@
 
 set(SRCS "main.c" "wasi.c" "wamr.c" "config.c" "pinmap.c")
 
-set(REQUIRES esp_http_server esp_http_client esp_wifi esp_netif nvs_flash esp_driver_gpio driver json mbedtls)
+set(REQUIRES esp_http_server esp_http_client esp_wifi esp_netif nvs_flash esp_driver_gpio driver json mbedtls esp32-camera)
 
 set(INCLUDE_DIRS "." "../../../../../wasm-micro-runtime")
 

@@ -6,6 +6,7 @@ dependencies:
   idf:
     version: '>=4.4'
   espressif/esp-tflite-micro:
-    version: "*"
+    version: '*'
     rules:
-      - if: "$CONFIG{USE_TFLM} == True"
+    - if: $CONFIG{USE_TFLM} == True
+  espressif/esp32-camera: '*'

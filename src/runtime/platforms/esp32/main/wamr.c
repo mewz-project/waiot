@@ -72,6 +72,12 @@ static NativeSymbol native_symbols[] = {
     {"http_close", (void *)http_close, "(i)i", NULL},
 };
 
+static NativeSymbol camera_symbols[] = {
+    {"camera_init", camera_init, "(iii)i", NULL},
+    {"camera_get", camera_get, "(ii)i", NULL},
+    {"if_camera_config_changed", if_camera_config_changed, "(iii)i", NULL},
+};
+
 #if CONFIG_USE_TFLM
 static NativeSymbol wasi_nn_syms[] = {
     {"load", load, "(*ii*)i", NULL},
@@ -168,6 +174,14 @@ void init_wamr()
         return;
     }
 
+    if (!wasm_runtime_register_natives(
+            "wasi_waiot:camera", camera_symbols,
+            (uint32_t)(sizeof(camera_symbols) / sizeof(NativeSymbol))))
+    {
+        ESP_LOGE(LOG_TAG, "Failed to register Camera native symbols.");
+        return;
+    }
+
 #if CONFIG_USE_TFLM
     if (!wasm_runtime_register_natives(
             "wasi:wasi_nn", wasi_nn_syms,
@@ -235,7 +249,7 @@ run_wamr()
     pthread_mutex_lock(&g_wamr_thread_mu);
     if (!(wasm_module_inst =
               wasm_runtime_instantiate(wasm_module, 32 * 1024, // stack size
-                                       32 * 1024,              // heap size
+                                       64 * 1024,              // heap size
                                        error_buf, sizeof(error_buf))))
     {
         ESP_LOGE(LOG_TAG, "Error while instantiating: %s", error_buf);
