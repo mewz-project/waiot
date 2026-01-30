@@ -249,7 +249,7 @@ run_wamr()
     pthread_mutex_lock(&g_wamr_thread_mu);
     if (!(wasm_module_inst =
               wasm_runtime_instantiate(wasm_module, 32 * 1024, // stack size
-                                       32 * 1024,              // heap size
+                                       64 * 1024,              // heap size
                                        error_buf, sizeof(error_buf))))
     {
         ESP_LOGE(LOG_TAG, "Error while instantiating: %s", error_buf);

@@ -10,10 +10,10 @@ use embedded_hal_wasm::http_client::{HttpClient, Method};
 use embedded_hal::delay::DelayNs;
 use embedded_hal_wasm::delay::WasmDelay;
 
-const BUF_SIZE: usize = 16 * 1024;
+const BUF_SIZE: usize = 32 * 1024;
 static BUFFER: Mutex<[u8; BUF_SIZE]> = Mutex::new([0; BUF_SIZE]);
 
-const POST_URL: &str = "http://192.168.10.111:8000/upload";
+const POST_URL: &str = "http://172.24.195.78:8000/upload";
 const TIMEOUT_MS: i32 = 10_000;
 
 fn post_jpeg(url: &str, jpeg: &[u8], contents_len: i32) -> Result<i32, ()> {
@@ -41,7 +41,7 @@ fn post_jpeg(url: &str, jpeg: &[u8], contents_len: i32) -> Result<i32, ()> {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> () {
-    let camera = match Camera::init(PixelFormat::Grayscale, FrameSize::Size96x96, 30) {
+    let camera = match Camera::init(PixelFormat::JPEG, FrameSize::SizeVGA, 12) {
         Ok(cam) => cam,
         Err(_) => {
             return;

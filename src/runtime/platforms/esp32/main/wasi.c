@@ -751,9 +751,12 @@ int32_t camera_init(wasm_exec_env_t exec_env, int pixel_format, int frame_size, 
         .frame_size = frame_size,
         .jpeg_quality = jpeg_quality,
         .fb_count = 1,
-        .grab_mode = CAMERA_GRAB_WHEN_EMPTY};
+        .fb_location = CAMERA_FB_IN_DRAM,
+        .grab_mode = CAMERA_GRAB_WHEN_EMPTY,
+    };
 
     // Try to use PSRAM for frame buffer if available
+    /*
     if (has_psram())
     {
         config.fb_location = CAMERA_FB_IN_PSRAM;
@@ -764,6 +767,7 @@ int32_t camera_init(wasm_exec_env_t exec_env, int pixel_format, int frame_size, 
         config.fb_count = 1;
         ESP_LOGW("wasi", "PSRAM not found; lowering fb_count to 1");
     }
+    */
 
     gpio_set_direction((gpio_num_t)13, GPIO_MODE_INPUT);
     gpio_set_direction((gpio_num_t)14, GPIO_MODE_INPUT);
