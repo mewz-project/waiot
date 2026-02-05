@@ -265,7 +265,7 @@ run_wamr()
     ESP_LOGI(LOG_TAG, "Instantiate WASM runtime");
     pthread_mutex_lock(&g_wamr_thread_mu);
     if (!(wasm_module_inst =
-              wasm_runtime_instantiate(wasm_module, 32 * 1024, // stack size
+              wasm_runtime_instantiate(wasm_module, 128 * 1024, // stack size
                                        64 * 1024,              // heap size
                                        error_buf, sizeof(error_buf))))
     {

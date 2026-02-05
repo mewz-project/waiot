@@ -4,6 +4,7 @@
 use panic_halt as _;
 use spin::Mutex;
 use libm::{expf, sqrtf};
+use embedded_hal_wasm::println;
 
 #[link(wasm_import_module = "wasi_nn:esp_dl")]
 unsafe extern "C" {
@@ -13,12 +14,13 @@ unsafe extern "C" {
     pub fn compute_simple() -> i32;
     pub fn get_output_simple(index: u32, output_ptr_idx: u32, output_buff_max_size: u32) -> i32;
 }
+static MODEL: &[u8] = include_bytes!("./pedestrian_detect_pico_s8_v1.espdl");
+static IMAGE_RGB565_BE: &[u8] = include_bytes!("./people.rgb8");
 
 const INPUT_W: usize = 224;
 const INPUT_H: usize = 224;
 const INPUT_C: usize = 3;
 const INPUT_SIZE: usize = INPUT_W * INPUT_H * INPUT_C;
-const OUTPUT_MAX: usize = 25088;
 
 const S0_HW: usize = 28 * 28;
 const S1_HW: usize = 14 * 14;
@@ -31,22 +33,17 @@ const BBOX1_SIZE: usize = S1_HW * 32;
 const SCORE2_SIZE: usize = S2_HW;
 const BBOX2_SIZE: usize = S2_HW * 32;
 
-const INPUT_EXP: i32 = 1;
-const SCORE_EXP: i32 = -6;
-const BOX_EXP: i32 = -6;
+const SCORE_EXP: i32 = -8;
+const BOX_EXP: i32 = -3;
 
 const SCORE_THR: f32 = 0.5;
 const NMS_THR: f32 = 0.3;
 const TOPK: usize = 10;
 
-static MODEL: &[u8] = include_bytes!("./pedestrian_detect_pico_s8_v1.espdl");
-static IMAGE_RGB565_BE: &[u8] = include_bytes!("./pedestrian.jpg");
-
 #[repr(align(16))]
 struct Aligned<const N: usize>([u8; N]);
 
 static INPUT: Mutex<Aligned<INPUT_SIZE>> = Mutex::new(Aligned([0; INPUT_SIZE]));
-static OUTPUT: Mutex<Aligned<OUTPUT_MAX>> = Mutex::new(Aligned([0; OUTPUT_MAX]));
 
 static OUT_SCORE0: Mutex<Aligned<SCORE0_SIZE>> = Mutex::new(Aligned([0; SCORE0_SIZE]));
 static OUT_BBOX0: Mutex<Aligned<BBOX0_SIZE>> = Mutex::new(Aligned([0; BBOX0_SIZE]));
@@ -54,6 +51,14 @@ static OUT_SCORE1: Mutex<Aligned<SCORE1_SIZE>> = Mutex::new(Aligned([0; SCORE1_S
 static OUT_BBOX1: Mutex<Aligned<BBOX1_SIZE>> = Mutex::new(Aligned([0; BBOX1_SIZE]));
 static OUT_SCORE2: Mutex<Aligned<SCORE2_SIZE>> = Mutex::new(Aligned([0; SCORE2_SIZE]));
 static OUT_BBOX2: Mutex<Aligned<BBOX2_SIZE>> = Mutex::new(Aligned([0; BBOX2_SIZE]));
+
+static DETS: Mutex<[Det; 256]> = Mutex::new([Det {
+    cls: 0,
+    score: 0.0,
+    b: Box2i { x1: 0, y1: 0, x2: 0, y2: 0 },
+}; 256]);
+
+static KEEP: Mutex<[u8; 256]> = Mutex::new([0u8; 256]);
 
 // -------------------------
 // Quant helpers (ESP-DLの pow2 exponent 相当)
@@ -73,66 +78,13 @@ fn dequant_i8(q: i8, exp: i32) -> f32 {
     (q as f32) * scale_from_exp(exp)
 }
 
-#[inline]
-fn quant_to_i8(x: f32, exp: i32) -> i8 {
-    // symmetric quant: q = round(x / scale)
-    let s = scale_from_exp(exp);
-    // let mut q = (x / s).round() as i32;
-    let mut q = (x / s) as i32;
-    if q > 127 { q = 127; }
-    if q < -128 { q = -128; }
-    q as i8
-}
 
-// -------------------------
-// RGB565(BE) -> RGB888
-// -------------------------
-#[inline]
-fn rgb565be_to_rgb888(px_hi: u8, px_lo: u8) -> (u8, u8, u8) {
-    let v = ((px_hi as u16) << 8) | (px_lo as u16);
-    let r5 = ((v >> 11) & 0x1F) as u16;
-    let g6 = ((v >> 5) & 0x3F) as u16;
-    let b5 = (v & 0x1F) as u16;
-
-    // 5/6bit -> 8bit expand
-    let r = ((r5 * 255 + 15) / 31) as u8;
-    let g = ((g6 * 255 + 31) / 63) as u8;
-    let b = ((b5 * 255 + 15) / 31) as u8;
-    (r, g, b)
-}
-
-// -------------------------
-// Preprocess (ESP-DL ImagePreprocessor 相当：letterbox無し、mean=0,std=1)
-// - src: RGB565(BE) (src_w * src_h * 2 bytes)
-// - dst: model input RGB888_QINT8  (224*224*3 bytes, int8をu8で格納)
-// -------------------------
-fn preprocess_rgb565be_to_model_input_qint8(
-    src_rgb565be: &[u8],
-    src_w: usize,
-    src_h: usize,
-    dst_qint8_rgb888: &mut [u8],
-) {
-    // nearest neighbor resize
-    // dst is HWC RGB
-    for dy in 0..INPUT_H {
-        let sy = dy * src_h / INPUT_H;
-        for dx in 0..INPUT_W {
-            let sx = dx * src_w / INPUT_W;
-
-            let s_idx = (sy * src_w + sx) * 2;
-            let (r, g, b) = rgb565be_to_rgb888(src_rgb565be[s_idx], src_rgb565be[s_idx + 1]);
-
-            // mean=0,std=1 -> そのまま
-            // RGB(0..255) を int8 へ（exponentでスケール）
-            let qr = quant_to_i8(r as f32, INPUT_EXP);
-            let qg = quant_to_i8(g as f32, INPUT_EXP);
-            let qb = quant_to_i8(b as f32, INPUT_EXP);
-
-            let d_idx = (dy * INPUT_W + dx) * 3;
-            dst_qint8_rgb888[d_idx + 0] = qr as u8;
-            dst_qint8_rgb888[d_idx + 1] = qg as u8;
-            dst_qint8_rgb888[d_idx + 2] = qb as u8;
-        }
+fn preprocess_rgb888_224_to_qint8(src: &[u8], dst: &mut [u8]) {
+    for i in 0..dst.len() {
+        // INPUT_EXP=1なら /2 の整数化が最速
+        let x = src[i];
+        let q = ((x as u16 + 1) >> 1) as i8; // round(x/2)
+        dst[i] = q as u8;
     }
 }
 
@@ -316,13 +268,16 @@ fn nms_inplace(dets: &mut [Det], det_count: &mut usize) {
         dets[j] = key;
     }
 
-    let mut keep = [true; 256];
+    // let mut keep = [true; 256];
+    let mut keep_guard = KEEP.lock();
+    let keep = &mut *keep_guard;
+    for i in 0..n { keep[i] = 1; }
     for i in 0..n {
-        if !keep[i] { continue; }
+        if keep[i] == 0 { continue; }
         for j in (i + 1)..n {
-            if !keep[j] { continue; }
+            if keep[j] == 0 { continue; }
             if iou(dets[i].b, dets[j].b) > NMS_THR {
-                keep[j] = false;
+                keep[j] = 0;
             }
         }
     }
@@ -330,7 +285,7 @@ fn nms_inplace(dets: &mut [Det], det_count: &mut usize) {
     // compact
     let mut w = 0usize;
     for i in 0..n {
-        if keep[i] {
+        if keep[i] != 0 {
             dets[w] = dets[i];
             w += 1;
             if w >= TOPK { break; }
@@ -344,48 +299,40 @@ fn postprocess_pico(
     score1: &[u8], bbox1: &[u8],
     score2: &[u8], bbox2: &[u8],
 ) {
-    let mut dets = [Det { cls: 0, score: 0.0, b: Box2i { x1: 0, y1: 0, x2: 0, y2: 0 } }; 256];
+    // let mut dets = [Det { cls: 0, score: 0.0, b: Box2i { x1: 0, y1: 0, x2: 0, y2: 0 } }; 256];
+    let mut dets_guard = DETS.lock();
+    let dets: &mut [Det; 256] = &mut *dets_guard;
     let mut det_count = 0usize;
 
     // stage params: {{8,8,4,4},{16,16,8,8},{32,32,16,16}}
     // ここでは stride_y=stride_x=stride, offsetも同値として扱う
-    parse_stage(&mut dets, &mut det_count, score0, bbox0, S0_HW, 8, 4);
-    parse_stage(&mut dets, &mut det_count, score1, bbox1, S1_HW, 16, 8);
-    parse_stage(&mut dets, &mut det_count, score2, bbox2, S2_HW, 32, 16);
+    parse_stage(dets, &mut det_count, score0, bbox0, S0_HW, 8, 4);
+    parse_stage(dets, &mut det_count, score1, bbox1, S1_HW, 16, 8);
+    parse_stage(dets, &mut det_count, score2, bbox2, S2_HW, 32, 16);
 
-    nms_inplace(&mut dets[..], &mut det_count);
+    nms_inplace(dets, &mut det_count);
 
     // no_std なので println はしない。
     // ここで dets[0..det_count] を、必要な共有メモリや出力バッファへ書き戻してください。
     // 例: 先頭の1件だけ別領域に書く、など。
-    let _ = (dets, det_count);
-}
-
-
-fn preprocess_into_rgb224(jpeg: &[u8], out_rgb: &mut [u8]) {
-    let mut j = 0usize;
-    for i in 0..out_rgb.len() {
-        out_rgb[i] = jpeg[j];
-        j += 1;
-        if j >= jpeg.len() {
-            j = 0;
-        }
+    println!("Detections: {}", det_count);
+    for i in 0..det_count {
+        let d = &dets[i];
+        println!("  Det {}: cls={}, score={:.3}, box=({}, {}, {}, {})",
+            i, d.cls, d.score, d.b.x1, d.b.y1, d.b.x2, d.b.y2);
     }
+    // let _ = (dets, det_count);
 }
-
-fn postprocess(_out: &[u8]) {
-}
-
 
 
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> () {
     // load model
-    // let rc = unsafe { load_simple(MODEL.as_ptr() as u32, MODEL.len() as u32) };
-    // if rc != 0 {
-        // return;
-    // }
+    let rc = unsafe { load_simple(MODEL.as_ptr() as u32, MODEL.len() as u32) };
+    if rc != 0 {
+        return;
+    }
 
     // Init execution context
     let rc = unsafe { init_context_simple() };
@@ -394,26 +341,15 @@ pub extern "C" fn _start() -> () {
     }
 
 
-    // Set input
-    // let mut guard = INPUT.lock();
-    // let input_buff: &mut Aligned<INPUT_SIZE> = &mut *guard;
-    // preprocess_into_rgb224(IMAGE_RGB565_BE, input_buff.0.as_mut());
-    // let rc = unsafe { set_input_simple(input_buff.0.as_ptr() as u32, INPUT_SIZE as u32) };
-    // if rc != 0 {
-    //     return;
-    // }
-
     // preprocess -> INPUT
     {
-        // IMAGE_RGB565_BE の元解像度（あなたの入力に合わせて変更）
-        // 例: 320x240 など。ここは実際のフレームに合わせて必ず修正してください。
-        const SRC_W: usize = 320;
-        const SRC_H: usize = 240;
-
         let mut guard = INPUT.lock();
         let input_buff: &mut Aligned<INPUT_SIZE> = &mut *guard;
-        preprocess_rgb565be_to_model_input_qint8(IMAGE_RGB565_BE, SRC_W, SRC_H, input_buff.0.as_mut());
-
+        preprocess_rgb888_224_to_qint8(
+            IMAGE_RGB565_BE,
+            &mut input_buff.0,
+        );
+        
         let rc = unsafe { set_input_simple(input_buff.0.as_ptr() as u32, INPUT_SIZE as u32) };
         if rc != 0 { return; }
     }
@@ -426,40 +362,35 @@ pub extern "C" fn _start() -> () {
 
     // get outputs (index mapping assumed: score0,bbox0,score1,bbox1,score2,bbox2)
     {
-        let mut g0 = OUT_SCORE0.lock();
-        let mut g1 = OUT_BBOX0.lock();
-        let mut g2 = OUT_SCORE1.lock();
-        let mut g3 = OUT_BBOX1.lock();
-        let mut g4 = OUT_SCORE2.lock();
-        let mut g5 = OUT_BBOX2.lock();
+        // index mapping from espdl log:
+        // 0=bbox0, 1=bbox1, 2=bbox2, 3=score0, 4=score1, 5=score2
 
-        let rc = unsafe { get_output_simple(0, g0.0.as_mut_ptr() as u32, SCORE0_SIZE as u32) };
+        let mut g_score0 = OUT_SCORE0.lock();
+        let mut g_bbox0  = OUT_BBOX0.lock();
+        let mut g_score1 = OUT_SCORE1.lock();
+        let mut g_bbox1  = OUT_BBOX1.lock();
+        let mut g_score2 = OUT_SCORE2.lock();
+        let mut g_bbox2  = OUT_BBOX2.lock();
+
+        let rc = unsafe { get_output_simple(0, g_bbox0.0.as_mut_ptr() as u32, BBOX0_SIZE as u32) }; // bbox0
         if rc != 0 { return; }
-        let rc = unsafe { get_output_simple(1, g1.0.as_mut_ptr() as u32, BBOX0_SIZE as u32) };
+        let rc = unsafe { get_output_simple(1, g_bbox1.0.as_mut_ptr() as u32, BBOX1_SIZE as u32) }; // bbox1
         if rc != 0 { return; }
-        let rc = unsafe { get_output_simple(2, g2.0.as_mut_ptr() as u32, SCORE1_SIZE as u32) };
-        if rc != 0 { return; }
-        let rc = unsafe { get_output_simple(3, g3.0.as_mut_ptr() as u32, BBOX1_SIZE as u32) };
-        if rc != 0 { return; }
-        let rc = unsafe { get_output_simple(4, g4.0.as_mut_ptr() as u32, SCORE2_SIZE as u32) };
-        if rc != 0 { return; }
-        let rc = unsafe { get_output_simple(5, g5.0.as_mut_ptr() as u32, BBOX2_SIZE as u32) };
+        let rc = unsafe { get_output_simple(2, g_bbox2.0.as_mut_ptr() as u32, BBOX2_SIZE as u32) }; // bbox2
         if rc != 0 { return; }
 
+        let rc = unsafe { get_output_simple(3, g_score0.0.as_mut_ptr() as u32, SCORE0_SIZE as u32) }; // score0
+        if rc != 0 { return; }
+        let rc = unsafe { get_output_simple(4, g_score1.0.as_mut_ptr() as u32, SCORE1_SIZE as u32) }; // score1
+        if rc != 0 { return; }
+        let rc = unsafe { get_output_simple(5, g_score2.0.as_mut_ptr() as u32, SCORE2_SIZE as u32) }; // score2
+        if rc != 0 { return; }
+
+        // postprocess は (score0,bbox0, score1,bbox1, score2,bbox2) の順で渡す
         postprocess_pico(
-            &g0.0, &g1.0,
-            &g2.0, &g3.0,
-            &g4.0, &g5.0,
-        );
+            &g_score0.0, &g_bbox0.0,
+            &g_score1.0, &g_bbox1.0,
+            &g_score2.0, &g_bbox2.0,
+        );        
     }
-
-    // // Get output
-    // let mut guard_out = OUTPUT.lock();
-    // let output_buff: &mut Aligned<OUTPUT_MAX> = &mut *guard_out;
-    // for i in 0..6 {
-    //     let rc = unsafe { get_output_simple(i, output_buff.0.as_mut_ptr() as u32, OUTPUT_MAX as u32) };
-    //     if rc != 0 {
-    //     return;
-    //     }
-    // }
 }

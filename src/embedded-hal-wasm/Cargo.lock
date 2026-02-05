@@ -52,6 +52,7 @@ dependencies = [
  "libm",
  "panic-halt",
  "spin",
+ "tjpgdec-rs",
  "ufmt",
  "ufmt_float",
 ]
@@ -163,6 +164,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "tjpgdec-rs"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72efb4758c22d4ede593de7a74d19458ed5a3d1bcbec8b884b11fdf80ece8a29"
+dependencies = [
+ "heapless",
 ]
 
 [[package]]

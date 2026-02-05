@@ -171,6 +171,21 @@ static int load_from_wasm_buffer(wasm_exec_env_t exec_env, uint32_t model_ptr_id
         ESP_LOGI(TAG, "  output '%s': out_bytes=%d",
                  name.c_str(), output->get_bytes());
     }
+    dl::TensorBase *t = g_model->get_output("score0");
+    ESP_LOGI(TAG, "score0: dtype=%d exp=%d", t->dtype, t->exponent);
+
+    dl::TensorBase *b = g_model->get_output("bbox0");
+    ESP_LOGI(TAG, "bbox0: dtype=%d exp=%d", b->dtype, b->exponent);
+
+    ESP_LOGI(TAG, "  input: dtype=%d exp=%d bytes=%d shape=[%d,%d,%d,%d]",
+             g_input->dtype,
+             g_input->exponent,
+             g_input->get_bytes(),
+             (int)g_input->shape[0],
+             (int)g_input->shape[1],
+             (int)g_input->shape[2],
+             (int)g_input->shape[3]);
+
     return success;
 }
 
@@ -338,9 +353,9 @@ int esp_dl_get_output_simple_idx(wasm_exec_env_t exec_env,
 
     ESP_LOGD(TAG, "get_output_simple_idx: index=%u name=%s bytes=%d",
              (unsigned)index, g_output_names[index].c_str(), out_bytes);
-    ESP_LOGI(TAG, "%d %d %d %d %d %d %d %d",
-             ((int32_t *)dst)[0], ((int32_t *)dst)[1], ((int32_t *)dst)[2], ((int32_t *)dst)[3],
-             ((int32_t *)dst)[4], ((int32_t *)dst)[5], ((int32_t *)dst)[6], ((int32_t *)dst)[7]);
+    ESP_LOGI(TAG, "%x %x %x %x %x %x %x %x",
+             ((uint8_t *)dst)[0], ((uint8_t *)dst)[1], ((uint8_t *)dst)[2], ((uint8_t *)dst)[3],
+             ((uint8_t *)dst)[4], ((uint8_t *)dst)[5], ((uint8_t *)dst)[6], ((uint8_t *)dst)[7]);
 
     ESP_LOGI(TAG, "get_output_simple_idx: done");
     return success;

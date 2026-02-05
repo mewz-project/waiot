@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include "esp_err.h"
 
-#define IWASM_MAIN_STACK_SIZE (8 * 1024)
+#define IWASM_MAIN_STACK_SIZE (64 * 1024)
 #define REGISTER_MAX_UPLOAD_SIZE (1024 * 1024)
 #define LOG_TAG "waiot"
 
