@@ -342,5 +342,6 @@ int esp_dl_get_output_simple_idx(wasm_exec_env_t exec_env,
              ((int32_t *)dst)[0], ((int32_t *)dst)[1], ((int32_t *)dst)[2], ((int32_t *)dst)[3],
              ((int32_t *)dst)[4], ((int32_t *)dst)[5], ((int32_t *)dst)[6], ((int32_t *)dst)[7]);
 
+    ESP_LOGI(TAG, "get_output_simple_idx: done");
     return success;
 }
