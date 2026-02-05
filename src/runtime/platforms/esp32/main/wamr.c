@@ -2,6 +2,7 @@
 
 #include "wasi.h"
 #include "wasi_nn.h"
+#include "wasi_nn_esp_dl.h"
 #include "pinmap.h"
 #include "config.h"
 
@@ -76,6 +77,10 @@ static NativeSymbol camera_symbols[] = {
     {"camera_init", camera_init, "(iii)i", NULL},
     {"camera_get", camera_get, "(ii)i", NULL},
     {"if_camera_config_changed", if_camera_config_changed, "(iii)i", NULL},
+};
+
+static NativeSymbol wasi_nn_esp_dl_symbols[] = {
+    {"load_simple", esp_dl_load_simple, "(ii)i", NULL},
 };
 
 #if CONFIG_USE_TFLM
@@ -179,6 +184,14 @@ void init_wamr()
             (uint32_t)(sizeof(camera_symbols) / sizeof(NativeSymbol))))
     {
         ESP_LOGE(LOG_TAG, "Failed to register Camera native symbols.");
+        return;
+    }
+
+    if (!wasm_runtime_register_natives(
+            "wasi_nn:esp_dl", wasi_nn_esp_dl_symbols,
+            (uint32_t)(sizeof(wasi_nn_esp_dl_symbols) / sizeof(NativeSymbol))))
+    {
+        ESP_LOGE(LOG_TAG, "Failed to register WASI-NN ESP-DL native symbols.");
         return;
     }
 
