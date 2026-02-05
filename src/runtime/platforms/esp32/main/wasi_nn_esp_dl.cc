@@ -196,3 +196,151 @@ int esp_dl_init_execution_context_simple(wasm_exec_env_t exec_env)
     ESP_LOGI(TAG, "init_execution_context_simple: ok (outputs=%u)", (unsigned)g_output_names.size());
     return success;
 }
+
+int esp_dl_set_input_simple(wasm_exec_env_t exec_env, uint32_t input_ptr_idx, uint32_t input_size)
+{
+    ESP_LOGI(TAG, "set_input_simple: ptr=%u size=%u",
+             (unsigned)input_ptr_idx, (unsigned)input_size);
+    // Check model and input tensor
+    if (!g_input)
+    {
+        ESP_LOGE(TAG, "set_input_simple: model input not ready");
+        return runtime_error;
+    }
+    wasm_module_inst_t inst = get_inst(exec_env);
+    if (!inst)
+    {
+        ESP_LOGE(TAG, "set_input_simple: failed to get module instance");
+        return invalid_argument;
+    }
+    if (!app_range_ok(inst, input_ptr_idx, input_size))
+    {
+        ESP_LOGE(TAG, "set_input_simple: invalid memory range ptr=%u size=%u",
+                 (unsigned)input_ptr_idx, (unsigned)input_size);
+        return invalid_argument;
+    }
+
+    const int expected = g_input->get_bytes();
+    if ((int)input_size != expected)
+    {
+        ESP_LOGW(TAG, "set_input_simple: size mismatch got=%u expected=%d (zero-copy uses expected size!)",
+                 (unsigned)input_size, expected);
+    }
+
+    void *native_ptr = app_to_native(inst, input_ptr_idx);
+
+    if (((uintptr_t)native_ptr & 0xF) != 0)
+    {
+        ESP_LOGW(TAG, "set_input_simple: input ptr not 16B-aligned: %p (may hurt perf or break on some kernels)", native_ptr);
+    }
+
+    g_input->set_element_ptr(native_ptr);
+
+    // Copy version
+    // void *src = app_to_native(inst, input_ptr_idx);
+    // void *dst = g_input->get_element_ptr();
+    // if (!dst)
+    // {
+    //     ESP_LOGE(TAG, "set_input_simple: input element ptr is null");
+    //     return runtime_error;
+    // }
+
+    // int expected = g_input->get_bytes();
+    // size_t copy_sz = std::min<size_t>((size_t)input_size, (size_t)expected);
+
+    // if ((int)input_size != expected)
+    // {
+    //     ESP_LOGW(TAG, "set_input_simple: size mismatch got=%u expected=%d (copy %u)",
+    //              (unsigned)input_size, expected, (unsigned)copy_sz);
+    // }
+
+    // memcpy(dst, src, copy_sz);
+
+    ESP_LOGI(TAG, "set_input_simple: done");
+    return success;
+}
+
+int esp_dl_compute_simple(wasm_exec_env_t exec_env)
+{
+    (void)exec_env;
+    ESP_LOGI(TAG, "compute_simple...");
+
+    if (!g_model)
+    {
+        ESP_LOGE(TAG, "compute_simple: model not loaded");
+        return runtime_error;
+    }
+
+    g_model->run(dl::RUNTIME_MODE_SINGLE_CORE);
+
+    ESP_LOGI(TAG, "compute_simple: done");
+    return success;
+}
+
+static dl::TensorBase *get_output_tensor_by_index(uint32_t index)
+{
+    if (index >= g_output_names.size())
+    {
+        return nullptr;
+    }
+    const std::string &name = g_output_names[index];
+    auto it = g_outputs_map.find(name);
+    if (it == g_outputs_map.end())
+    {
+        return nullptr;
+    }
+    return it->second;
+}
+
+int esp_dl_get_output_simple_idx(wasm_exec_env_t exec_env,
+                                 uint32_t index,
+                                 uint32_t output_ptr_idx,
+                                 uint32_t output_buff_max_size)
+{
+    dl::TensorBase *out = get_output_tensor_by_index(index);
+    if (!out)
+    {
+        ESP_LOGE(TAG, "get_output_simple_idx: invalid index=%u (num=%u)",
+                 (unsigned)index, (unsigned)g_output_names.size());
+        return invalid_argument;
+    }
+
+    int out_bytes = out->get_bytes();
+    if (output_buff_max_size < (uint32_t)out_bytes)
+    {
+        ESP_LOGE(TAG, "get_output_simple_idx: buffer too small need=%d max=%u",
+                 out_bytes, (unsigned)output_buff_max_size);
+        return too_large;
+    }
+
+    wasm_module_inst_t inst = get_inst(exec_env);
+    if (!inst)
+    {
+        ESP_LOGE(TAG, "get_output_simple_idx: failed to get module instance");
+        return invalid_argument;
+    }
+    if (!app_range_ok(inst, output_ptr_idx, (uint32_t)out_bytes))
+    {
+        ESP_LOGE(TAG, "get_output_simple_idx: invalid memory range ptr=%u size=%d",
+                 (unsigned)output_ptr_idx, out_bytes);
+        return invalid_argument;
+    }
+
+    void *dst = app_to_native(inst, output_ptr_idx);
+    void *src = out->get_element_ptr();
+    if (!src)
+    {
+        ESP_LOGE(TAG, "get_output_simple_idx: output element ptr is null");
+        return runtime_error;
+    }
+
+    memcpy(dst, src, (size_t)out_bytes);
+
+    ESP_LOGD(TAG, "get_output_simple_idx: index=%u name=%s bytes=%d",
+             (unsigned)index, g_output_names[index].c_str(), out_bytes);
+    ESP_LOGI(TAG, "%d %d %d %d %d %d %d %d",
+             ((int32_t *)dst)[0], ((int32_t *)dst)[1], ((int32_t *)dst)[2], ((int32_t *)dst)[3],
+             ((int32_t *)dst)[4], ((int32_t *)dst)[5], ((int32_t *)dst)[6], ((int32_t *)dst)[7]);
+
+    return success;
+}

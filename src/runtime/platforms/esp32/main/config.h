@@ -4,7 +4,7 @@
 #include "esp_err.h"
 
 #define IWASM_MAIN_STACK_SIZE (8 * 1024)
-#define REGISTER_MAX_UPLOAD_SIZE (512 * 1024)
+#define REGISTER_MAX_UPLOAD_SIZE (1024 * 1024)
 #define LOG_TAG "waiot"
 
 #define CONFIG_NAMESPACE "config"
