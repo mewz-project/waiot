@@ -1,7 +1,7 @@
 # Copyright (C) 2021 Intel Corporation and others.  All rights reserved.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-set(SRCS "main.c" "wasi.c" "wamr.c" "config.c" "pinmap.c")
+set(SRCS "main.c" "wasi.c" "wamr.c" "config.c" "pinmap.c" "wasi_nn_esp_dl.cc")
 
 set(REQUIRES esp_http_server esp_http_client esp_wifi esp_netif nvs_flash esp_driver_gpio driver json mbedtls esp32-camera)
 

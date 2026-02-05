@@ -10,3 +10,4 @@ dependencies:
     rules:
     - if: $CONFIG{USE_TFLM} == True
   espressif/esp32-camera: '*'
+  espressif/esp-dl: ^3.2.4
