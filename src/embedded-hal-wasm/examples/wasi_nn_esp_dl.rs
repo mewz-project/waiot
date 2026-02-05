@@ -5,6 +5,7 @@ use panic_halt as _;
 use spin::Mutex;
 use libm::{expf, sqrtf};
 use embedded_hal_wasm::println;
+use embedded_hal_wasm::http_client::{HttpClient, Method};
 
 #[link(wasm_import_module = "wasi_nn:esp_dl")]
 unsafe extern "C" {
@@ -14,8 +15,12 @@ unsafe extern "C" {
     pub fn compute_simple() -> i32;
     pub fn get_output_simple(index: u32, output_ptr_idx: u32, output_buff_max_size: u32) -> i32;
 }
+
+const POST_URL: &str = "http://172.24.195.78:8000/upload";
+const TIMEOUT_MS: i32 = 10_000;
+
 static MODEL: &[u8] = include_bytes!("./pedestrian_detect_pico_s8_v1.espdl");
-static IMAGE_RGB565_BE: &[u8] = include_bytes!("./people.rgb8");
+static IMAGE_RGB565_BE: &[u8] = include_bytes!("./pedestrian_224.rgb8");
 
 const INPUT_W: usize = 224;
 const INPUT_H: usize = 224;
@@ -59,6 +64,93 @@ static DETS: Mutex<[Det; 256]> = Mutex::new([Det {
 }; 256]);
 
 static KEEP: Mutex<[u8; 256]> = Mutex::new([0u8; 256]);
+
+// ======================
+// Upload PPM
+// ======================
+const IMG_W: usize = 224;
+const IMG_H: usize = 224;
+const IMG_SIZE: usize = IMG_W * IMG_H * 3;
+const PPM_MAX: usize = IMG_SIZE + 64;
+static POST_BUF: Mutex<[u8; PPM_MAX]> = Mutex::new([0u8; PPM_MAX]);
+static OVERLAY_IMG: Mutex<Aligned<IMG_SIZE>> = Mutex::new(Aligned([0u8; IMG_SIZE]));
+
+fn post_ppm(url: &str, ppm: &[u8], contents_len: i32) -> Result<i32, ()> {
+    let mut client = HttpClient::open(Method::Post, url, TIMEOUT_MS, contents_len).map_err(|_| ())?;
+
+    client.set_header("Content-Type", "image/x-portable-pixmap").map_err(|_| ())?;
+    client.set_header("X-Device", "waiot-esp").map_err(|_| ())?;
+
+    let mut off = 0usize;
+    while off < ppm.len() {
+        let n = client.write(&ppm[off..]).map_err(|_| ())?;
+        if n == 0 {
+            return Err(());
+        }
+        off += n;
+    }
+    let _ = client.fetch_headers();
+
+    let status = client.status().map_err(|_| ())?;
+    let _ = client.close();
+
+    Ok(status)
+}
+
+fn build_ppm_p6_224(src_rgb888: &[u8; IMG_SIZE], out: &mut [u8; PPM_MAX]) -> usize {
+    // P6 header
+    // 例: "P6\n224 224\n255\n"
+    let header = b"P6\n224 224\n255\n";
+    let hlen = header.len();
+    out[..hlen].copy_from_slice(header);
+    out[hlen..hlen + IMG_SIZE].copy_from_slice(src_rgb888);
+    hlen + IMG_SIZE
+}
+
+#[inline]
+fn clamp_i32(v: i32, lo: i32, hi: i32) -> i32 {
+    if v < lo { lo } else if v > hi { hi } else { v }
+}
+
+fn put_px(img: &mut [u8; IMG_SIZE], x: i32, y: i32, r: u8, g: u8, b: u8) {
+    if x < 0 || y < 0 || x >= IMG_W as i32 || y >= IMG_H as i32 { return; }
+    let idx = ((y as usize) * IMG_W + (x as usize)) * 3;
+    img[idx + 0] = r;
+    img[idx + 1] = g;
+    img[idx + 2] = b;
+}
+
+fn draw_rect_rgb888(img: &mut [u8; IMG_SIZE], mut x1: i32, mut y1: i32, mut x2: i32, mut y2: i32) {
+    // clamp & fix order
+    x1 = clamp_i32(x1, 0, (IMG_W as i32) - 1);
+    y1 = clamp_i32(y1, 0, (IMG_H as i32) - 1);
+    x2 = clamp_i32(x2, 0, (IMG_W as i32) - 1);
+    y2 = clamp_i32(y2, 0, (IMG_H as i32) - 1);
+    if x2 < x1 { core::mem::swap(&mut x1, &mut x2); }
+    if y2 < y1 { core::mem::swap(&mut y1, &mut y2); }
+
+    // thickness
+    let t = 2;
+
+    // color: red
+    let (r, g, b) = (255u8, 0u8, 0u8);
+
+    for k in 0..t {
+        let yy1 = y1 + k;
+        let yy2 = y2 - k;
+        let xx1 = x1 + k;
+        let xx2 = x2 - k;
+
+        for x in xx1..=xx2 {
+            put_px(img, x, yy1, r, g, b);
+            put_px(img, x, yy2, r, g, b);
+        }
+        for y in yy1..=yy2 {
+            put_px(img, xx1, y, r, g, b);
+            put_px(img, xx2, y, r, g, b);
+        }
+    }
+}
 
 // -------------------------
 // Quant helpers (ESP-DLの pow2 exponent 相当)
@@ -298,7 +390,7 @@ fn postprocess_pico(
     score0: &[u8], bbox0: &[u8],
     score1: &[u8], bbox1: &[u8],
     score2: &[u8], bbox2: &[u8],
-) {
+) -> usize{
     // let mut dets = [Det { cls: 0, score: 0.0, b: Box2i { x1: 0, y1: 0, x2: 0, y2: 0 } }; 256];
     let mut dets_guard = DETS.lock();
     let dets: &mut [Det; 256] = &mut *dets_guard;
@@ -322,6 +414,7 @@ fn postprocess_pico(
             i, d.cls, d.score, d.b.x1, d.b.y1, d.b.x2, d.b.y2);
     }
     // let _ = (dets, det_count);
+    det_count   
 }
 
 
@@ -387,10 +480,38 @@ pub extern "C" fn _start() -> () {
         if rc != 0 { return; }
 
         // postprocess は (score0,bbox0, score1,bbox1, score2,bbox2) の順で渡す
-        postprocess_pico(
+        let det_count = postprocess_pico(
             &g_score0.0, &g_bbox0.0,
             &g_score1.0, &g_bbox1.0,
             &g_score2.0, &g_bbox2.0,
         );        
+    
+        let mut img_guard = OVERLAY_IMG.lock();
+        let img: &mut [u8; IMG_SIZE] = &mut img_guard.0;
+
+        // 元画像 people.rgb8 が「224x224 RGB888 raw」である前提
+        img.copy_from_slice(IMAGE_RGB565_BE);
+
+        // dets から bbox を描画
+        let dets_guard = DETS.lock();
+        let dets = &*dets_guard;
+        for i in 0..det_count {
+            let b = dets[i].b;
+            draw_rect_rgb888(img, b.x1, b.y1, b.x2, b.y2);
+        }
+
+        // 2) PPM(P6) を作って POST
+        let mut post_guard = POST_BUF.lock();
+        let post_buf: &mut [u8; PPM_MAX] = &mut *post_guard;
+        let n = build_ppm_p6_224(img, post_buf);
+
+        match post_ppm(POST_URL, &post_buf[..n], n as i32) {
+            Ok(status) => {
+                println!("POST status={}", status);
+            }
+            Err(_) => {
+                println!("POST failed");
+            }
+        }
     }
 }
