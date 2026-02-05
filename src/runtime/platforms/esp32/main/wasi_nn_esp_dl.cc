@@ -144,12 +144,6 @@ static int load_from_wasm_buffer(wasm_exec_env_t exec_env, uint32_t model_ptr_id
         ESP_LOGE(TAG, "dl::Model alloc failed");
         return runtime_error;
     }
-    // if (g_model->load(kModelPartitionLabel, fbs::MODEL_LOCATION_IN_FLASH_PARTITION, nullptr, param_copy) != ESP_OK)
-    // {
-    //     ESP_LOGE(TAG, "Model::load failed");
-    //     cleanup_model();
-    //     return invalid_argument;
-    // }
     
     // Allocate tensors / internal buffers
     g_model->build(/*max_internal_size=*/0, dl::MEMORY_MANAGER_GREEDY, /*preload=*/false);
@@ -180,8 +174,25 @@ static int load_from_wasm_buffer(wasm_exec_env_t exec_env, uint32_t model_ptr_id
     return success;
 }
 
+// Load model from memory
 int esp_dl_load_simple(wasm_exec_env_t exec_env, uint32_t model_ptr_idx, uint32_t model_size)
 {
     // Same loader core
     return load_from_wasm_buffer(exec_env, model_ptr_idx, model_size);
+}
+
+// Initialize execution context
+// Only check if model is loaded
+int esp_dl_init_execution_context_simple(wasm_exec_env_t exec_env)
+{
+    (void)exec_env;
+
+    if (!g_model || !g_input || g_outputs_map.empty())
+    {
+        ESP_LOGE(TAG, "init_execution_context_simple: model not loaded");
+        return runtime_error;
+    }
+
+    ESP_LOGI(TAG, "init_execution_context_simple: ok (outputs=%u)", (unsigned)g_output_names.size());
+    return success;
 }

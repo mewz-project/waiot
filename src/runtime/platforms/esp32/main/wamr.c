@@ -81,6 +81,7 @@ static NativeSymbol camera_symbols[] = {
 
 static NativeSymbol wasi_nn_esp_dl_symbols[] = {
     {"load_simple", esp_dl_load_simple, "(ii)i", NULL},
+    {"init_context_simple", esp_dl_init_execution_context_simple, "()i", NULL},
 };
 
 #if CONFIG_USE_TFLM

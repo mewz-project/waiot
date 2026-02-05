@@ -9,7 +9,7 @@ use panic_halt as _;
 #[link(wasm_import_module = "wasi_nn:esp_dl")]
 unsafe extern "C" {
     pub fn load_simple(model_ptr_idx: u32, model_size: u32) -> i32;
-    pub fn esp_dl_init_execution_context_simple() -> i32;
+    pub fn init_context_simple() -> i32;
     pub fn esp_dl_set_input_simple(input_ptr_idx: u32, input_size: u32) -> i32;
     pub fn esp_dl_compute_simple() -> i32;
     pub fn esp_dl_get_output_simple(output_ptr_idx: u32, output_buff_max_size: u32) -> i32;
@@ -39,11 +39,11 @@ pub extern "C" fn _start() -> () {
         return;
     }
 
-    // init execution context
-    // let rc = unsafe { esp_dl_init_execution_context_simple() };
-    // if rc != 0 {
-    //     return;
-    // }
+    // Init execution context
+    let rc = unsafe { init_context_simple() };
+    if rc != 0 {
+        return;
+    }
 
     // Preprocess input
     // unsafe {
