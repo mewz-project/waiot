@@ -8,7 +8,7 @@ use panic_halt as _;
 
 #[link(wasm_import_module = "wasi_nn:esp_dl")]
 unsafe extern "C" {
-    pub fn esp_dl_load_simple(model_ptr_idx: u32, model_size: u32) -> i32;
+    pub fn load_simple(model_ptr_idx: u32, model_size: u32) -> i32;
     pub fn esp_dl_init_execution_context_simple() -> i32;
     pub fn esp_dl_set_input_simple(input_ptr_idx: u32, input_size: u32) -> i32;
     pub fn esp_dl_compute_simple() -> i32;
@@ -34,7 +34,7 @@ fn postprocess(_out: &[u8]) {
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> () {
     // load model
-    let rc = unsafe { esp_dl_load_simple(MODEL.as_ptr() as u32, MODEL.len() as u32) };
+    let rc = unsafe { load_simple(MODEL.as_ptr() as u32, MODEL.len() as u32) };
     if rc != 0 {
         return;
     }

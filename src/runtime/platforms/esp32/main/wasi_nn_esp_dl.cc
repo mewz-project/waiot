@@ -16,11 +16,14 @@ static const char *TAG = "wasi_nn_espdl";
 
 static std::vector<uint8_t> g_model_storage;
 
-static fbs::FbsModel *g_fbs_model = nullptr;
 static dl::Model *g_model = nullptr;
-
 static dl::TensorBase *g_input = nullptr;
-static dl::TensorBase *g_output = nullptr;
+static std::map<std::string, dl::TensorBase *> g_outputs_map;
+static std::vector<std::string> g_output_names;
+
+static constexpr const char *kModelPartitionLabel = "model";
+
+static size_t round_up_4k(size_t n) { return (n + 4095) & ~((size_t)4095); }
 
 static void cleanup_model()
 {
@@ -29,14 +32,9 @@ static void cleanup_model()
         delete g_model;
         g_model = nullptr;
     }
-    if (g_fbs_model)
-    {
-        delete g_fbs_model;
-        g_fbs_model = nullptr;
-    }
     g_input = nullptr;
-    g_output = nullptr;
-    g_model_storage.clear();
+    g_outputs_map.clear();
+    g_output_names.clear();
 }
 
 static wasm_module_inst_t get_inst(wasm_exec_env_t exec_env)
@@ -75,55 +73,110 @@ static int load_from_wasm_buffer(wasm_exec_env_t exec_env, uint32_t model_ptr_id
 
     // Copy model bytes from wasm memory
     uint8_t *src = (uint8_t *)app_to_native(inst, model_ptr_idx);
-    g_model_storage.assign(src, src + model_size);
 
-    // Create FbsModel from memory buffer
-    g_fbs_model = new fbs::FbsModel(
-        g_model_storage.data(),
-        g_model_storage.size(),
-        fbs::MODEL_LOCATION_IN_FLASH_RODATA,
-        /*encrypt=*/false,
-        /*rodata_move=*/false,
-        /*auto_free=*/false,
-        /*param_copy=*/true);
-
-    if (!g_fbs_model)
+    // ===============================
+    // Store model to partition
+    // ===============================
+    const esp_partition_t *part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA,
+        ESP_PARTITION_SUBTYPE_ANY,
+        kModelPartitionLabel);
+    if (!part)
     {
-        ESP_LOGE(TAG, "load_from_wasm_buffer: FbsModel alloc failed");
-        cleanup_model();
-        return runtime_error;
+        ESP_LOGE(TAG, "model partition '%s' not found", kModelPartitionLabel);
+        return not_found;
     }
 
-    g_model = new dl::Model(g_fbs_model, /*internal_size=*/0, dl::MEMORY_MANAGER_GREEDY);
+    if (model_size > part->size)
+    {
+        ESP_LOGE(TAG, "model too large: %u > partition %u", (unsigned)model_size, (unsigned)part->size);
+        return too_large;
+    }
+    // erase partition
+    size_t erase_sz = round_up_4k(model_size);
+    esp_err_t err = esp_partition_erase_range(part, 0, erase_sz);
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(TAG, "erase failed: %s", esp_err_to_name(err));
+        return runtime_error;
+    }
+    // write model data
+    size_t write_sz = (model_size + 3) & ~((size_t)3);
+    uint8_t tail_pad[4] = {0, 0, 0, 0};
+    if (write_sz == model_size)
+    {
+        err = esp_partition_write(part, 0, src, model_size);
+        if (err != ESP_OK)
+        {
+            ESP_LOGE(TAG, "write failed: %s", esp_err_to_name(err));
+            return runtime_error;
+        }
+    }
+    else
+    {
+        // body
+        err = esp_partition_write(part, 0, src, model_size);
+        if (err != ESP_OK)
+        {
+            ESP_LOGE(TAG, "write body failed: %s", esp_err_to_name(err));
+            return runtime_error;
+        }
+        // padding
+        size_t pad_len = write_sz - model_size;
+        err = esp_partition_write(part, model_size, tail_pad, pad_len);
+        if (err != ESP_OK)
+        {
+            ESP_LOGE(TAG, "write pad failed: %s", esp_err_to_name(err));
+            return runtime_error;
+        }
+    }
+
+    // ===============================
+    // load model
+    // ===============================
+    bool param_copy = true;
+    g_model = new dl::Model(kModelPartitionLabel, fbs::MODEL_LOCATION_IN_FLASH_PARTITION,
+                            /*max_internal_size=*/0, dl::MEMORY_MANAGER_GREEDY,
+                            /*key=*/nullptr, /*param_copy=*/param_copy);
+
     if (!g_model)
     {
-        ESP_LOGE(TAG, "load_from_wasm_buffer: dl::Model alloc failed");
-        cleanup_model();
+        ESP_LOGE(TAG, "dl::Model alloc failed");
         return runtime_error;
     }
-
-    if (g_model->load(g_fbs_model) != ESP_OK)
-    {
-        ESP_LOGE(TAG, "load_from_wasm_buffer: dl::Model::load failed");
-        cleanup_model();
-        return invalid_argument;
-    }
-
+    // if (g_model->load(kModelPartitionLabel, fbs::MODEL_LOCATION_IN_FLASH_PARTITION, nullptr, param_copy) != ESP_OK)
+    // {
+    //     ESP_LOGE(TAG, "Model::load failed");
+    //     cleanup_model();
+    //     return invalid_argument;
+    // }
+    
     // Allocate tensors / internal buffers
     g_model->build(/*max_internal_size=*/0, dl::MEMORY_MANAGER_GREEDY, /*preload=*/false);
 
     g_input = g_model->get_input();
-    g_output = g_model->get_output();
-    if (!g_input || !g_output)
+    g_outputs_map = g_model->get_outputs();
+    g_output_names.reserve(g_outputs_map.size());
+    for (const auto &kv : g_outputs_map)
+    {
+        g_output_names.push_back(kv.first);
+    }
+
+    if (!g_input || g_outputs_map.empty())
     {
         ESP_LOGE(TAG, "load_from_wasm_buffer: get_input/get_output failed");
         cleanup_model();
         return runtime_error;
     }
 
-    ESP_LOGI(TAG, "Model loaded: in_bytes=%d out_bytes=%d",
-             g_input->get_bytes(), g_output->get_bytes());
-
+    ESP_LOGI(TAG, "Model loaded: in_bytes=%d",
+             g_input->get_bytes());
+    for (const auto &name : g_output_names)
+    {
+        dl::TensorBase *output = g_outputs_map[name];
+        ESP_LOGI(TAG, "  output '%s': out_bytes=%d",
+                 name.c_str(), output->get_bytes());
+    }
     return success;
 }
 
