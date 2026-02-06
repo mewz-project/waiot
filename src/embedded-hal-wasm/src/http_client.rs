@@ -22,7 +22,8 @@ pub type Result<T> = core::result::Result<T, HostError>;
 
 #[link(wasm_import_module = "wasi_waiot:http_client")]
 unsafe extern "C" {
-    fn http_open(method: i32, url_ptr: i32, url_len: i32, timeout_ms: i32, content_len: i32) -> i32;
+    fn http_init(url_ptr: i32, url_len: i32, timeout_ms: i32) -> i32;
+    fn http_open(handle: i32, method: i32, content_len: i32) -> i32;
     fn http_set_header(handle: i32, k_ptr: i32, k_len: i32, v_ptr: i32, v_len: i32) -> i32;
     fn http_fetch_headers(handle: i32) -> i32;
     fn http_write(handle: i32, buf_ptr: i32, buf_len: i32) -> i32;
@@ -53,14 +54,19 @@ pub struct HttpClient {
 /// A wrapper for HTTP client on ESP-IDF platform.
 /// `close` is called automatically when dropped.
 impl HttpClient {
-    /// Open a new HTTP connection.
-    /// content_len: set to 0 for no body
-    pub fn open(method: Method, url: &str, timeout_ms: i32, content_len: i32) -> Result<Self> {
+    pub fn init(url: &str, timeout_ms: i32) -> Result<Self> {
         let (uptr, ulen) = ptr_len(url);
-
-        let h = unsafe { http_open(method as i32, uptr, ulen, timeout_ms, content_len) };
+        let h = unsafe { http_init(uptr, ulen, timeout_ms) };
         if h < 0 { return Err(HostError(h)); }
         Ok(Self { handle: h })
+    }
+
+    /// Open a new HTTP connection.
+    /// content_len: set to 0 for no body
+    pub fn open(&mut self, method: Method, content_len: i32) -> Result<()> {
+        let h = unsafe { http_open(self.handle, method as i32, content_len) };
+        if h < 0 { return Err(HostError(h)); }
+        Ok(())
     }
 
     pub fn set_header(&mut self, key: &str, val: &str) -> Result<()> {

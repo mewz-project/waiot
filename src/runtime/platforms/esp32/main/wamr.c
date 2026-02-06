@@ -64,7 +64,8 @@ static NativeSymbol wasi_snapshot_preview1_syms[] = {
 };
 
 static NativeSymbol native_symbols[] = {
-    {"http_open", (void *)http_open, "(iiiii)i", NULL},
+    {"http_init", (void *)http_init, "(iii)i", NULL},
+    {"http_open", (void *)http_open, "(iii)i", NULL},
     {"http_set_header", (void *)http_set_header, "(iiiii)i", NULL},
     {"http_fetch_headers", (void *)http_fetch_headers, "(i)i", NULL},
     {"http_write", (void *)http_write, "(iii)i", NULL},
@@ -74,7 +75,7 @@ static NativeSymbol native_symbols[] = {
 };
 
 static NativeSymbol camera_symbols[] = {
-    {"camera_init", camera_init, "(iii)i", NULL},
+    {"camera_init", camera_init, "(iiii)i", NULL},
     {"camera_get", camera_get, "(ii)i", NULL},
     {"if_camera_config_changed", if_camera_config_changed, "(iii)i", NULL},
 };
@@ -265,7 +266,7 @@ run_wamr()
     ESP_LOGI(LOG_TAG, "Instantiate WASM runtime");
     pthread_mutex_lock(&g_wamr_thread_mu);
     if (!(wasm_module_inst =
-              wasm_runtime_instantiate(wasm_module, 128 * 1024, // stack size
+              wasm_runtime_instantiate(wasm_module, 64 * 1024, // stack size
                                        64 * 1024,              // heap size
                                        error_buf, sizeof(error_buf))))
     {

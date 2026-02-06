@@ -4,7 +4,7 @@
 use panic_halt as _;
 use spin::Mutex;
 
-use embedded_hal_wasm::esp::{Camera, FrameSize, PixelFormat};
+use embedded_hal_wasm::esp::{Camera, CameraDeviceType, FrameSize, PixelFormat};
 use embedded_hal_wasm::http_client::{HttpClient, Method};
 use embedded_hal_wasm::digital::WasmGpioPin;
 use embedded_hal_wasm::i2c::WasmI2c;
@@ -23,13 +23,10 @@ static BUFFER: Mutex<[u8; BUF_SIZE]> = Mutex::new([0; BUF_SIZE]);
 const POST_URL: &str = "http://192.168.10.111:8000/upload";
 const TIMEOUT_MS: i32 = 10_000;
 
-const I2C_PORT: i32 = 1;
-const I2C_SDA_PIN: u32 = 12;
-const I2C_SCL_PIN: u32 = 11;
-const I2C_FREQ_HZ: i32 = 400_000;
-
 fn post_rgb565(url: &str, rgb565: &[u8], content_len: i32) -> Result<i32, ()> {
-    let mut client = HttpClient::open(Method::Post, url, TIMEOUT_MS, content_len).map_err(|_| ())?;
+    let mut client =
+        HttpClient::init(url, TIMEOUT_MS).map_err(|_| ())?;
+    client.open(Method::Post, content_len).map_err(|_| ())?;
 
     // Raw RGB565
     client
@@ -62,6 +59,10 @@ fn post_rgb565(url: &str, rgb565: &[u8], content_len: i32) -> Result<i32, ()> {
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> () {
     // I2C init (legacy/new depends on your build; this just sets up the bus pins/port)
+    const I2C_PORT: i32 = 1;
+    const I2C_SDA_PIN: u32 = 12;
+    const I2C_SCL_PIN: u32 = 11;
+    const I2C_FREQ_HZ: i32 = 400_000;
     let sda_gpio = WasmGpioPin::new(I2C_SDA_PIN);
     let scl_gpio = WasmGpioPin::new(I2C_SCL_PIN);
     let config = embedded_hal_wasm::i2c::Config {
@@ -73,7 +74,7 @@ pub extern "C" fn _start() -> () {
     let _ = WasmI2c::new(config);
 
     // Camera init: RGB565 240x240
-    let camera = match Camera::init(PixelFormat::RGB565, FrameSize::Size240x240, 12) {
+    let camera = match Camera::init(CameraDeviceType::GC0308, PixelFormat::RGB565, FrameSize::Size240x240, 12) {
         Ok(cam) => cam,
         Err(_) => return,
     };

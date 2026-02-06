@@ -40,13 +40,14 @@ int32_t log_read_from_oldest(uint32_t offset, uint8_t *out, uint32_t len);
 
 // HTTP client
 void init_http_client();
-int32_t
-    http_open(wasm_exec_env_t exec_env,
-              int32_t method,
-              int32_t url_ptr,
-              int32_t url_len,
-              int32_t timeout_ms,
-              int32_t content_len);
+
+int32_t http_init(wasm_exec_env_t exec_env, int32_t url_ptr,
+                  int32_t url_len,
+                  int32_t timeout_ms);
+int32_t http_open(wasm_exec_env_t exec_env,
+                      int32_t handle,
+                      int32_t method,
+                      int32_t content_len);
 
 int32_t http_set_header(wasm_exec_env_t exec_env,
                     int32_t handle,
@@ -72,6 +73,6 @@ int32_t http_close(wasm_exec_env_t exec_env, int32_t handle);
 // Camera
 int32_t if_camera_config_changed(wasm_exec_env_t exec_env, int pixel_format, int frame_size, int jpeg_quality);
 
-int32_t camera_init(wasm_exec_env_t exec_env, int pixel_format, int frame_size, int jpeg_quality);
+int32_t camera_init(wasm_exec_env_t exec_env, int camera_device_type, int pixel_format, int frame_size, int jpeg_quality);
 
 int32_t camera_get(wasm_exec_env_t exec_env, int32_t buf_ptr, int32_t buf_size);

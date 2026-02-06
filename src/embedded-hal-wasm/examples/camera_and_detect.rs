@@ -10,8 +10,8 @@ use embedded_hal_wasm::esp::{Camera, FrameSize, PixelFormat};
 use embedded_hal_wasm::http_client::{HttpClient, Method};
 use embedded_hal_wasm::digital::WasmGpioPin;
 use embedded_hal_wasm::i2c::WasmI2c;
-use embedded_hal_wasm::delay::WasmDelay;
-use embedded_hal::delay::DelayNs;
+// use embedded_hal_wasm::delay::WasmDelay;
+// use embedded_hal::delay::DelayNs;
 
 #[link(wasm_import_module = "wasi_nn:esp_dl")]
 unsafe extern "C" {
@@ -31,8 +31,10 @@ const TIMEOUT_MS: i32 = 10_000;
 // ======================
 // Camera (240x240 RGB565)
 // ======================
-const CAM_W: usize = 240;
-const CAM_H: usize = 240;
+const CAM_W: usize = 128;
+const CAM_H: usize = 128;
+// const CAM_W: usize = 240;
+// const CAM_H: usize = 240;
 const CAM_BPP: usize = 2;
 const CAM_BUF_SIZE: usize = CAM_W * CAM_H * CAM_BPP;
 static CAM_BUF: Mutex<[u8; CAM_BUF_SIZE]> = Mutex::new([0u8; CAM_BUF_SIZE]);
@@ -51,6 +53,10 @@ const INPUT_W: usize = 224;
 const INPUT_H: usize = 224;
 const INPUT_C: usize = 3;
 const INPUT_SIZE: usize = INPUT_W * INPUT_H * INPUT_C;
+
+const SMALL_W: usize = CAM_W;
+const SMALL_H: usize = CAM_H;
+const PAD: usize = (INPUT_W - SMALL_W) / 2;
 
 #[repr(align(16))]
 struct Aligned<const N: usize>([u8; N]);
@@ -100,9 +106,10 @@ const PPM_MAX: usize = IMG_SIZE + 64;
 static POST_BUF: Mutex<[u8; PPM_MAX]> = Mutex::new([0u8; PPM_MAX]);
 
 fn post_ppm(url: &str, ppm: &[u8], contents_len: i32) -> Result<i32, ()> {
-    let mut client = HttpClient::open(Method::Post, url, TIMEOUT_MS, contents_len).map_err(|_| ())?;
+    let mut client = HttpClient::init(url, TIMEOUT_MS).map_err(|_| ())?;
     client.set_header("Content-Type", "image/x-portable-pixmap").map_err(|_| ())?;
     client.set_header("X-Device", "waiot-esp").map_err(|_| ())?;
+    client.open(Method::Post, contents_len).map_err(|_| ())?;
 
     let mut off = 0usize;
     while off < ppm.len() {
@@ -127,34 +134,86 @@ fn build_ppm_p6_224(src_rgb888: &[u8; IMG_SIZE], out: &mut [u8; PPM_MAX]) -> usi
 // ======================
 // Image conversion: 240x240 RGB565(LE) -> 224x224 RGB888 center crop
 // ======================
-#[inline]
+// #[inline]
+// fn expand_5_to_8(v: u16) -> u8 {
+//     // 0..31 -> 0..255
+//     ((v * 255 + 15) / 31) as u8
+// }
+// #[inline]
+// fn expand_6_to_8(v: u16) -> u8 {
+//     // 0..63 -> 0..255
+//     ((v * 255 + 31) / 63) as u8
+// }
+#[inline(always)]
 fn expand_5_to_8(v: u16) -> u8 {
-    // 0..31 -> 0..255
-    ((v * 255 + 15) / 31) as u8
-}
-#[inline]
-fn expand_6_to_8(v: u16) -> u8 {
-    // 0..63 -> 0..255
-    ((v * 255 + 31) / 63) as u8
+    let x = v as u8;          // 0..31
+    (x << 3) | (x >> 2)       // 5bit -> 8bit
 }
 
-fn rgb565le_240_to_rgb888_224_center_crop(src: &[u8; CAM_BUF_SIZE], dst: &mut [u8; IMG_SIZE]) {
+#[inline(always)]
+fn expand_6_to_8(v: u16) -> u8 {
+    let x = v as u8;          // 0..63
+    (x << 2) | (x >> 4)       // 6bit -> 8bit
+}
+
+fn preprocess_rgb565be_240_to_rgb888_224_and_qint8(
+    src: &[u8; CAM_BUF_SIZE],
+    dst_rgb888: &mut [u8; IMG_SIZE],
+    dst_qint8: &mut [u8; INPUT_SIZE],
+) {
     // crop offset: (240-224)/2 = 8
-    let off = 8usize;
+    const OFF: usize = 8;
 
     for y in 0..INPUT_H {
-        let sy = y + off; // 8..231
-        for x in 0..INPUT_W {
-            let sx = x + off; // 8..231
+        let mut si = ((y + OFF) * CAM_W + OFF) * 2;
+        let mut di = (y * INPUT_W) * 3;
+        for _ in 0..INPUT_W {
+            let px = ((src[si] as u16) << 8) | (src[si + 1] as u16);
+            si += 2;
+            let r5 = (px >> 11) & 0x1F;
+            let g6 = (px >> 5) & 0x3F;
+            let b5 = px & 0x1F;
 
-            let si = (sy * CAM_W + sx) * 2;
-            // let lo = src[si] as u16;
-            // let hi = src[si + 1] as u16;
-            // let px = lo | (hi << 8); // little-endian u16
-            let hi = src[si] as u16;
-            let lo = src[si + 1] as u16;
-            let px = (hi << 8) | lo; // big-endian u16
+            let r = expand_5_to_8(r5);
+            let g = expand_6_to_8(g6);
+            let b = expand_5_to_8(b5);
+            
+            dst_rgb888[di + 0] = r;
+            dst_rgb888[di + 1] = g;
+            dst_rgb888[di + 2] = b;
 
+            dst_qint8[di + 0] = r >> 1;
+            dst_qint8[di + 1] = g >> 1;
+            dst_qint8[di + 2] = b >> 1;
+            di += 3;
+        }
+    }
+}
+
+fn preprocess_rgb565be_128_to_rgb888_244_center_and_qint8(
+    src: &[u8; CAM_BUF_SIZE],
+    dst_rgb888: &mut [u8; IMG_SIZE],
+    dst_qint8: &mut [u8; INPUT_SIZE],
+) {
+    // 240→128 の center crop
+    let src_off = (CAM_W - SMALL_W) / 2; // = 56
+
+    for y in 0..SMALL_H {
+        let sy = y + src_off;
+        let mut si = (sy * CAM_W + src_off) * 2;
+
+        let dy = y + PAD;
+        let mut di = (dy * INPUT_W + PAD) * 3;
+
+        for _ in 0..SMALL_W {
+            let px = ((src[si] as u16) << 8) | (src[si + 1] as u16);
+            si += 2;
+            // let sx = x + src_off;
+
+            // let si = (sy * CAM_W + sx) * 2;
+            // let hi = src[si] as u16;
+            // let lo = src[si + 1] as u16;
+            // let px = (hi << 8) | lo; // ※既存コードに合わせてBE
 
             let r5 = (px >> 11) & 0x1F;
             let g6 = (px >> 5) & 0x3F;
@@ -164,25 +223,23 @@ fn rgb565le_240_to_rgb888_224_center_crop(src: &[u8; CAM_BUF_SIZE], dst: &mut [u
             let g = expand_6_to_8(g6);
             let b = expand_5_to_8(b5);
 
-            let di = (y * INPUT_W + x) * 3;
-            dst[di + 0] = r;
-            dst[di + 1] = g;
-            dst[di + 2] = b;
+            // ★224x224 中央に配置
+            // let dx = x + PAD;
+            // let dy = y + PAD;
+            // let di = (dy * INPUT_W + dx) * 3;
+
+            // dst_rgb888[di + 0] = r;
+            // dst_rgb888[di + 1] = g;
+            // dst_rgb888[di + 2] = b;
+
+            dst_qint8[di + 0] = (r >> 1) as u8;
+            dst_qint8[di + 1] = (g >> 1) as u8;
+            dst_qint8[di + 2] = (b >> 1) as u8;
+            di += 3;
         }
     }
 }
 
-// ======================
-// Preprocess: RGB888 -> qint8(=u8に格納)
-// （元コードの「x/2」方式を維持）
-// ======================
-fn preprocess_rgb888_224_to_qint8(src_rgb888: &[u8; IMG_SIZE], dst: &mut [u8; INPUT_SIZE]) {
-    for i in 0..INPUT_SIZE {
-        let x = src_rgb888[i];
-        let q = ((x as u16 + 1) >> 1) as i8; // round(x/2)
-        dst[i] = q as u8;
-    }
-}
 
 // ======================
 // Drawing helpers
@@ -463,7 +520,7 @@ pub extern "C" fn _start() -> () {
     let _ = WasmI2c::new(config);
 
     // ---- Camera init (RGB565 240x240)
-    let camera = match Camera::init(PixelFormat::RGB565, FrameSize::Size240x240, 12) {
+    let camera = match Camera::init(PixelFormat::RGB565, FrameSize::Size128x128, 12) {
         Ok(cam) => cam,
         Err(_) => return,
     };
@@ -474,84 +531,95 @@ pub extern "C" fn _start() -> () {
     let rc = unsafe { init_context_simple() };
     if rc != 0 { return; }
 
-    // ---- Capture 1 frame
-    {
-        let mut cam_guard = CAM_BUF.lock();
-        let cam_buf: &mut [u8; CAM_BUF_SIZE] = &mut *cam_guard;
+    // ---- Main loop
+    let mut rgb_guard = RGB888_224.lock();
+    let mut in_guard = INPUT.lock();
+    let rgb888: &mut [u8; IMG_SIZE] = &mut rgb_guard.0;
+    let input_q: &mut [u8; INPUT_SIZE] = &mut in_guard.0;
 
-        let n = match camera.get(cam_buf) {
-            Ok(n) => n as usize,
-            Err(_) => return,
-        };
-        if n < CAM_BUF_SIZE { return; }
+    for v in input_q.iter_mut() {
+        *v = 0;
+    }
+    for _ in 0..100 {
 
-        // ---- Convert RGB565(240) -> RGB888(224 crop)
+        // ---- Capture 1 frame
         {
-            let mut rgb_guard = RGB888_224.lock();
-            let rgb888: &mut [u8; IMG_SIZE] = &mut rgb_guard.0;
-            rgb565le_240_to_rgb888_224_center_crop(cam_buf, rgb888);
+            for v in rgb888.iter_mut() {
+                *v = 0;
+            }
 
-            // ---- Preprocess RGB888 -> qint8 input
-            let mut in_guard = INPUT.lock();
-            let input_q: &mut [u8; INPUT_SIZE] = &mut in_guard.0;
-            preprocess_rgb888_224_to_qint8(rgb888, input_q);
+            let mut cam_guard = CAM_BUF.lock();
+            let cam_buf: &mut [u8; CAM_BUF_SIZE] = &mut *cam_guard;
 
-            let rc = unsafe { set_input_simple(input_q.as_ptr() as u32, INPUT_SIZE as u32) };
-            if rc != 0 { return; }
+            let n = match camera.get(cam_buf) {
+                Ok(n) => n as usize,
+                Err(_) => return,
+            };
+            if n < CAM_BUF_SIZE { return; }
+
+            // ---- Convert RGB565(240) -> RGB888(224 crop)
+            {
+                // ---- Preprocess RGB888 -> qint8 input
+                // preprocess_rgb565be_240_to_rgb888_224_and_qint8(cam_buf, rgb888, input_q);
+                preprocess_rgb565be_128_to_rgb888_244_center_and_qint8(cam_buf, rgb888, input_q);
+
+                let rc = unsafe { set_input_simple(input_q.as_ptr() as u32, INPUT_SIZE as u32) };
+                if rc != 0 { return; }
+            }
         }
+
+        // ---- Compute
+        let rc = unsafe { compute_simple() };
+        if rc != 0 { return; }
+
+        // ---- Get outputs
+        {
+            let mut g_score0 = OUT_SCORE0.lock();
+            let mut g_bbox0  = OUT_BBOX0.lock();
+            let mut g_score1 = OUT_SCORE1.lock();
+            let mut g_bbox1  = OUT_BBOX1.lock();
+            let mut g_score2 = OUT_SCORE2.lock();
+            let mut g_bbox2  = OUT_BBOX2.lock();
+
+            // index mapping:
+            // 0=bbox0, 1=bbox1, 2=bbox2, 3=score0, 4=score1, 5=score2
+            if unsafe { get_output_simple(0, g_bbox0.0.as_mut_ptr() as u32, BBOX0_SIZE as u32) } != 0 { return; }
+            if unsafe { get_output_simple(1, g_bbox1.0.as_mut_ptr() as u32, BBOX1_SIZE as u32) } != 0 { return; }
+            if unsafe { get_output_simple(2, g_bbox2.0.as_mut_ptr() as u32, BBOX2_SIZE as u32) } != 0 { return; }
+            if unsafe { get_output_simple(3, g_score0.0.as_mut_ptr() as u32, SCORE0_SIZE as u32) } != 0 { return; }
+            if unsafe { get_output_simple(4, g_score1.0.as_mut_ptr() as u32, SCORE1_SIZE as u32) } != 0 { return; }
+            if unsafe { get_output_simple(5, g_score2.0.as_mut_ptr() as u32, SCORE2_SIZE as u32) } != 0 { return; }
+
+            let det_count = postprocess_pico(
+                &g_score0.0, &g_bbox0.0,
+                &g_score1.0, &g_bbox1.0,
+                &g_score2.0, &g_bbox2.0,
+            );
+
+            // ---- Draw & upload PPM
+            let dets_guard = DETS.lock();
+            let dets = &*dets_guard;
+
+            for i in 0..det_count {
+                let b = dets[i].b;
+                draw_rect_rgb888(rgb888, b.x1, b.y1, b.x2, b.y2);
+            }
+
+            let mut post_guard = POST_BUF.lock();
+            let post_buf: &mut [u8; PPM_MAX] = &mut *post_guard;
+
+            // ---- Build PPM
+            let n = build_ppm_p6_224(rgb888, post_buf);
+
+            // ---- POST upload
+            match post_ppm(POST_URL, &post_buf[..n], n as i32) {
+                Ok(status) => println!("POST status={}", status),
+                Err(_) => println!("POST failed"),
+            }
+        }
+
+        // ---- Delay
+        // let mut delay = WasmDelay;
+        // delay.delay_ns(100_000_000); // 0.1s
     }
-
-    // ---- Compute
-    let rc = unsafe { compute_simple() };
-    if rc != 0 { return; }
-
-    // ---- Get outputs
-    {
-        let mut g_score0 = OUT_SCORE0.lock();
-        let mut g_bbox0  = OUT_BBOX0.lock();
-        let mut g_score1 = OUT_SCORE1.lock();
-        let mut g_bbox1  = OUT_BBOX1.lock();
-        let mut g_score2 = OUT_SCORE2.lock();
-        let mut g_bbox2  = OUT_BBOX2.lock();
-
-        // index mapping:
-        // 0=bbox0, 1=bbox1, 2=bbox2, 3=score0, 4=score1, 5=score2
-        if unsafe { get_output_simple(0, g_bbox0.0.as_mut_ptr() as u32, BBOX0_SIZE as u32) } != 0 { return; }
-        if unsafe { get_output_simple(1, g_bbox1.0.as_mut_ptr() as u32, BBOX1_SIZE as u32) } != 0 { return; }
-        if unsafe { get_output_simple(2, g_bbox2.0.as_mut_ptr() as u32, BBOX2_SIZE as u32) } != 0 { return; }
-        if unsafe { get_output_simple(3, g_score0.0.as_mut_ptr() as u32, SCORE0_SIZE as u32) } != 0 { return; }
-        if unsafe { get_output_simple(4, g_score1.0.as_mut_ptr() as u32, SCORE1_SIZE as u32) } != 0 { return; }
-        if unsafe { get_output_simple(5, g_score2.0.as_mut_ptr() as u32, SCORE2_SIZE as u32) } != 0 { return; }
-
-        let det_count = postprocess_pico(
-            &g_score0.0, &g_bbox0.0,
-            &g_score1.0, &g_bbox1.0,
-            &g_score2.0, &g_bbox2.0,
-        );
-
-        // ---- Draw & upload PPM
-        let mut rgb_guard = RGB888_224.lock();
-        let img: &mut [u8; IMG_SIZE] = &mut rgb_guard.0;
-
-        let dets_guard = DETS.lock();
-        let dets = &*dets_guard;
-
-        for i in 0..det_count {
-            let b = dets[i].b;
-            draw_rect_rgb888(img, b.x1, b.y1, b.x2, b.y2);
-        }
-
-        let mut post_guard = POST_BUF.lock();
-        let post_buf: &mut [u8; PPM_MAX] = &mut *post_guard;
-
-        let n = build_ppm_p6_224(img, post_buf);
-        match post_ppm(POST_URL, &post_buf[..n], n as i32) {
-            Ok(status) => println!("POST status={}", status),
-            Err(_) => println!("POST failed"),
-        }
-    }
-
-    // 任意：連続撮影したいならループ化
-    let mut delay = WasmDelay;
-    delay.delay_ns(100_000_000); // 0.1s
 }
