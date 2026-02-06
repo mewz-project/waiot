@@ -688,6 +688,20 @@ int32_t http_close(wasm_exec_env_t exec_env, int32_t handle)
 #define HREF_GPIO_NUM 27
 #define PCLK_GPIO_NUM 25
 
+#define BSP_CAMERA_XCLK (GPIO_NUM_NC)
+#define BSP_CAMERA_PCLK (GPIO_NUM_45)
+#define BSP_CAMERA_VSYNC (GPIO_NUM_46)
+#define BSP_CAMERA_HSYNC (GPIO_NUM_38)
+#define BSP_CAMERA_D0 (GPIO_NUM_39)
+#define BSP_CAMERA_D1 (GPIO_NUM_40)
+#define BSP_CAMERA_D2 (GPIO_NUM_41)
+#define BSP_CAMERA_D3 (GPIO_NUM_42)
+#define BSP_CAMERA_D4 (GPIO_NUM_15)
+#define BSP_CAMERA_D5 (GPIO_NUM_16)
+#define BSP_CAMERA_D6 (GPIO_NUM_48)
+#define BSP_CAMERA_D7 (GPIO_NUM_47)
+#define BSP_I2C_NUM 1
+
 static bool has_camera_initialized = false;
 static int current_pixel_format = -1;
 static int current_frame_size = -1;
@@ -723,37 +737,91 @@ int32_t camera_init(wasm_exec_env_t exec_env, int pixel_format, int frame_size, 
     current_pixel_format = pixel_format;
     current_frame_size = frame_size;
     current_jpeg_quality = jpeg_quality;
-
     camera_config_t config = {
-        .pin_pwdn = PWDN_GPIO_NUM,
-        .pin_reset = RESET_GPIO_NUM,
-        .pin_xclk = XCLK_GPIO_NUM,
-        .pin_sccb_sda = SIOD_GPIO_NUM,
-        .pin_sccb_scl = SIOC_GPIO_NUM,
-        .pin_d7 = Y9_GPIO_NUM,
-        .pin_d6 = Y8_GPIO_NUM,
-        .pin_d5 = Y7_GPIO_NUM,
-        .pin_d4 = Y6_GPIO_NUM,
-        .pin_d3 = Y5_GPIO_NUM,
-        .pin_d2 = Y4_GPIO_NUM,
-        .pin_d1 = Y3_GPIO_NUM,
-        .pin_d0 = Y2_GPIO_NUM,
-
-        .pin_vsync = VSYNC_GPIO_NUM,
-        .pin_href = HREF_GPIO_NUM,
-        .pin_pclk = PCLK_GPIO_NUM,
-
-        .xclk_freq_hz = 20000000,
+        .pin_pwdn = GPIO_NUM_NC,
+        .pin_reset = GPIO_NUM_NC,
+        .pin_xclk = BSP_CAMERA_XCLK,
+        .pin_sccb_sda = GPIO_NUM_NC,
+        .pin_sccb_scl = GPIO_NUM_NC,
+        .pin_d7 = BSP_CAMERA_D7,
+        .pin_d6 = BSP_CAMERA_D6,
+        .pin_d5 = BSP_CAMERA_D5,
+        .pin_d4 = BSP_CAMERA_D4,
+        .pin_d3 = BSP_CAMERA_D3,
+        .pin_d2 = BSP_CAMERA_D2,
+        .pin_d1 = BSP_CAMERA_D1,
+        .pin_d0 = BSP_CAMERA_D0,
+        .pin_vsync = BSP_CAMERA_VSYNC,
+        .pin_href = BSP_CAMERA_HSYNC,
+        .pin_pclk = BSP_CAMERA_PCLK,
+        .xclk_freq_hz = 10000000,
         .ledc_timer = LEDC_TIMER_0,
         .ledc_channel = LEDC_CHANNEL_0,
-
+        // .pixel_format = PIXFORMAT_RGB565,
+        // .frame_size = FRAMESIZE_QVGA,
+        // .jpeg_quality = 12,
+        // .fb_count = 2,
+        // .fb_location = CAMERA_FB_IN_PSRAM,
+        .sccb_i2c_port = BSP_I2C_NUM,
         .pixel_format = pixel_format,
         .frame_size = frame_size,
         .jpeg_quality = jpeg_quality,
         .fb_count = 1,
-        .fb_location = CAMERA_FB_IN_DRAM,
+        .fb_location = CAMERA_FB_IN_PSRAM,
         .grab_mode = CAMERA_GRAB_WHEN_EMPTY,
     };
+    // camera_config_t config = {
+    //     .pin_sccb_sda = 12, // SIOD
+    //     .pin_sccb_scl = 11, // SIOC
+
+    //     .pin_d7 = 47,
+    //     .pin_d6 = 48,
+    //     .pin_d5 = 16,
+    //     .pin_d4 = 15,
+    //     .pin_d3 = 42,
+    //     .pin_d2 = 41,
+    //     .pin_d1 = 40,
+    //     .pin_d0 = 39,
+
+    //     .pin_href = 38,
+    //     .pin_pclk = 45,
+    //     .pin_vsync = 46,
+
+    //     .pin_xclk = -1,
+    //     .pin_pwdn = -1,
+    //     .pin_reset = -1,
+    //     .xclk_freq_hz = 10000000,
+
+    //     // ESP_EYE
+    //     // .pin_pwdn = PWDN_GPIO_NUM,
+    //     // .pin_reset = RESET_GPIO_NUM,
+    //     // .pin_xclk = XCLK_GPIO_NUM,
+    //     // .pin_sccb_sda = SIOD_GPIO_NUM,
+    //     // .pin_sccb_scl = SIOC_GPIO_NUM,
+    //     // .pin_d7 = Y9_GPIO_NUM,
+    //     // .pin_d6 = Y8_GPIO_NUM,
+    //     // .pin_d5 = Y7_GPIO_NUM,
+    //     // .pin_d4 = Y6_GPIO_NUM,
+    //     // .pin_d3 = Y5_GPIO_NUM,
+    //     // .pin_d2 = Y4_GPIO_NUM,
+    //     // .pin_d1 = Y3_GPIO_NUM,
+    //     // .pin_d0 = Y2_GPIO_NUM,
+
+    //     // .pin_vsync = VSYNC_GPIO_NUM,
+    //     // .pin_href = HREF_GPIO_NUM,
+    //     // .pin_pclk = PCLK_GPIO_NUM,
+
+    //     // .xclk_freq_hz = 20000000,
+    //     .ledc_timer = LEDC_TIMER_0,
+    //     .ledc_channel = LEDC_CHANNEL_0,
+
+    //     .pixel_format = pixel_format,
+    //     .frame_size = frame_size,
+    //     .jpeg_quality = jpeg_quality,
+    //     .fb_count = 1,
+    //     .fb_location = CAMERA_FB_IN_DRAM,
+    //     .grab_mode = CAMERA_GRAB_WHEN_EMPTY,
+    // };
 
     // Try to use PSRAM for frame buffer if available
     /*
@@ -769,10 +837,14 @@ int32_t camera_init(wasm_exec_env_t exec_env, int pixel_format, int frame_size, 
     }
     */
 
-    gpio_set_direction((gpio_num_t)13, GPIO_MODE_INPUT);
-    gpio_set_direction((gpio_num_t)14, GPIO_MODE_INPUT);
+    // gpio_set_direction((gpio_num_t)13, GPIO_MODE_INPUT);
+    // gpio_set_direction((gpio_num_t)14, GPIO_MODE_INPUT);
+
+    esp_log_level_set("camera", ESP_LOG_DEBUG);
+    esp_log_level_set("sccb", ESP_LOG_DEBUG);
 
     esp_err_t err = esp_camera_init(&config);
+
     if (err != ESP_OK)
     {
         ESP_LOGE("wasi", "Camera init failed: 0x%x", err);
@@ -794,7 +866,12 @@ int32_t camera_get(wasm_exec_env_t exec_env, int32_t buf_ptr, int32_t buf_size)
     camera_fb_t *fb = esp_camera_fb_get();
     if (!fb)
     {
-        ESP_LOGE("wasi", "Capture failed");
+        ESP_LOGE("wasi", "esp_camera_fb_get failed");
+        ESP_LOGI("wasi", "free heap=%u free DMA=%u largest DMA=%u",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
+
         return -1;
     }
 
