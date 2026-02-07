@@ -1,7 +1,8 @@
 #include "wasi.h"
 
 #include "driver/gpio.h"
-#include "driver/i2c.h"
+// #include "driver/i2c.h"
+#include "driver/i2c_master.h"
 #include "driver/ledc.h"
 #include "esp_camera.h"
 #include "esp_err.h"
@@ -47,6 +48,95 @@ get_gpio(wasi_gpio_handle_t h)
 }
 
 //====================== I2C ======================
+
+static bool i2c_initialized = false;
+static i2c_master_bus_handle_t s_i2c_bus = NULL;
+
+static struct
+{
+    int32_t port;
+    int32_t sda_gpio;
+    int32_t scl_gpio;
+    int32_t freq_hz;
+    bool has_conf;
+} s_i2c_conf = {0};
+
+int32_t waiot_i2c_param_config(wasm_exec_env_t exec_env, int32_t port,
+                               int32_t sda_gpio, int32_t scl_gpio,
+                               int32_t freq_hz)
+{
+    ESP_LOGI("wasi_i2c",
+             "i2c_param_config(new): port=%d, sda_gpio=%d, scl_gpio=%d, freq_hz=%d",
+             port, sda_gpio, scl_gpio, freq_hz);
+
+    s_i2c_conf.port = port;
+    s_i2c_conf.sda_gpio = map_pin(sda_gpio);
+    s_i2c_conf.scl_gpio = map_pin(scl_gpio);
+    s_i2c_conf.freq_hz = freq_hz;
+    s_i2c_conf.has_conf = true;
+    return 0;
+}
+
+int32_t waiot_i2c_driver_install(wasm_exec_env_t exec_env, int32_t port)
+{
+    if (i2c_initialized)
+    {
+        ESP_LOGI("wasi_i2c", "i2c_driver_install(new): already initialized");
+        return 0;
+    }
+
+    if (!s_i2c_conf.has_conf)
+    {
+        ESP_LOGE("wasi_i2c", "i2c_driver_install(new): param_config not called");
+        return -1;
+    }
+
+    if (s_i2c_conf.port != port)
+    {
+        ESP_LOGW("wasi_i2c",
+                 "i2c_driver_install(new): port mismatch (param_config=%d, install=%d). Using install port.",
+                 (int)s_i2c_conf.port, (int)port);
+        s_i2c_conf.port = port;
+    }
+
+    ESP_LOGI("wasi_i2c",
+             "i2c_driver_install(new): port=%d, sda=%d, scl=%d",
+             (int)s_i2c_conf.port, (int)s_i2c_conf.sda_gpio, (int)s_i2c_conf.scl_gpio);
+
+    // const i2c_master_bus_config_t bus_cfg = {
+    //     .i2c_port = (i2c_port_t)s_i2c_conf.port,
+    //     .sda_io_num = (gpio_num_t)s_i2c_conf.sda_gpio,
+    //     .scl_io_num = (gpio_num_t)s_i2c_conf.scl_gpio,
+    //     .clk_source = I2C_CLK_SRC_DEFAULT,
+    // };
+    const i2c_master_bus_config_t bus_cfg = {
+        .i2c_port = 1,
+        .sda_io_num = 12,
+        .scl_io_num = 11,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+    };
+
+    esp_err_t err = i2c_new_master_bus(&bus_cfg, &s_i2c_bus);
+    if (err != ESP_OK)
+    {
+        ESP_LOGE("wasi_i2c", "i2c_new_master_bus failed: 0x%x", (unsigned)err);
+        s_i2c_bus = NULL;
+        return -1;
+    }
+
+    i2c_initialized = true;
+    return 0;
+}
+
+int32_t waiot_i2c_master_write(wasm_exec_env_t exec_env, int32_t port,
+                               int32_t addr, int32_t write_buff_ptr_idx, int32_t write_size, int32_t ticks_to_wait){
+                               return 0;
+                               }
+int32_t waiot_i2c_master_read(wasm_exec_env_t exec_env, int32_t port,
+                              int32_t addr, int32_t read_buff_ptr_idx, int32_t read_size, int32_t ticks_to_wait){
+    return 0;
+}
+/*
 int32_t waiot_i2c_param_config(wasm_exec_env_t exec_env, int32_t port,
                                int32_t sda_gpio, int32_t scl_gpio,
                                int32_t freq_hz)
@@ -71,6 +161,11 @@ int32_t waiot_i2c_param_config(wasm_exec_env_t exec_env, int32_t port,
 
 int32_t waiot_i2c_driver_install(wasm_exec_env_t exec_env, int32_t port)
 {
+    if (i2c_initialized)
+    {
+        ESP_LOGI("wasi_i2c", "i2c_driver_install: already initialized");
+        return 0;
+    }
     ESP_LOGI("wasi_i2c", "i2c_driver_install: port=%d", port);
     esp_err_t err;
     err = i2c_driver_install((i2c_port_t)port, I2C_MODE_MASTER, 0, 0, 0);
@@ -79,6 +174,7 @@ int32_t waiot_i2c_driver_install(wasm_exec_env_t exec_env, int32_t port)
         ESP_LOGE("wasi_i2c", "i2c_driver_install: i2c_driver_install failed: %d", err);
         return -1;
     }
+    i2c_initialized = true;
     return 0;
 }
 
@@ -155,6 +251,7 @@ int32_t waiot_i2c_master_read(wasm_exec_env_t exec_env, int32_t port,
                                                 (TickType_t)ticks_to_wait);
     return (err == ESP_OK) ? 0 : -1;
 }
+*/
 
 //====================== GPIO ======================
 
@@ -704,7 +801,7 @@ int32_t if_camera_config_changed(wasm_exec_env_t exec_env, int pixel_format, int
     }
     return 1; // Config changed
 }
-
+#include "bsp/m5stack_core_s3.h"
 int32_t camera_init(wasm_exec_env_t exec_env, int camera_device_type, int pixel_format, int frame_size, int jpeg_quality)
 {
     if (has_camera_initialized)
@@ -714,11 +811,19 @@ int32_t camera_init(wasm_exec_env_t exec_env, int camera_device_type, int pixel_
 
     ESP_LOGI("wasi", "camera_init: pixel_format=%d, frame_size=%d, jpeg_quality=%d",
              pixel_format, frame_size, jpeg_quality);
+
+    // int ret = bsp_i2c_init();
+    // if (ret != 0)
+    // {
+    //     ESP_LOGE("wasi", "bsp_i2c_init failed: %d", ret);
+    //     return ESP_FAIL;
+    // }
+
     has_camera_initialized = true;
     current_pixel_format = pixel_format;
     current_frame_size = frame_size;
     current_jpeg_quality = jpeg_quality;
-    camera_config_t config;
+    camera_config_t config = {0};
 
     switch (camera_device_type)
     {
@@ -745,7 +850,6 @@ int32_t camera_init(wasm_exec_env_t exec_env, int camera_device_type, int pixel_
         config.ledc_channel = LEDC_CHANNEL_0;
         gpio_set_direction((gpio_num_t)13, GPIO_MODE_INPUT);
         gpio_set_direction((gpio_num_t)14, GPIO_MODE_INPUT);
-
         break;
     case CAMERA_TYPE_GC0308:
         ESP_LOGI("wasi", "Camera type: GC0308");
@@ -774,6 +878,7 @@ int32_t camera_init(wasm_exec_env_t exec_env, int camera_device_type, int pixel_
         ESP_LOGE("wasi", "Unsupported camera type: %d", camera_device_type);
         return ESP_ERR_NOT_SUPPORTED;
     }
+    
     config.pixel_format = (pixformat_t)pixel_format;
     config.frame_size = (framesize_t)frame_size;
     config.jpeg_quality = jpeg_quality;
@@ -805,6 +910,8 @@ int32_t camera_init(wasm_exec_env_t exec_env, int camera_device_type, int pixel_
         ESP_LOGE("wasi", "Camera init failed: 0x%x", err);
         return err;
     }
+    ESP_LOGI("wasi", "Camera initialized with format=%d, size=%d, quality=%d",
+             config.pixel_format, config.frame_size, config.jpeg_quality);
 
     return ESP_OK;
 }

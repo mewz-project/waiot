@@ -6,7 +6,7 @@ use spin::Mutex;
 use libm::{expf, sqrtf};
 
 use embedded_hal_wasm::println;
-use embedded_hal_wasm::esp::{Camera, FrameSize, PixelFormat};
+use embedded_hal_wasm::esp::{Camera, FrameSize, PixelFormat, CameraDeviceType};
 use embedded_hal_wasm::http_client::{HttpClient, Method};
 use embedded_hal_wasm::digital::WasmGpioPin;
 use embedded_hal_wasm::i2c::WasmI2c;
@@ -31,10 +31,10 @@ const TIMEOUT_MS: i32 = 10_000;
 // ======================
 // Camera (240x240 RGB565)
 // ======================
-const CAM_W: usize = 128;
-const CAM_H: usize = 128;
-// const CAM_W: usize = 240;
-// const CAM_H: usize = 240;
+// const CAM_W: usize = 128;
+// const CAM_H: usize = 128;
+const CAM_W: usize = 240;
+const CAM_H: usize = 240;
 const CAM_BPP: usize = 2;
 const CAM_BUF_SIZE: usize = CAM_W * CAM_H * CAM_BPP;
 static CAM_BUF: Mutex<[u8; CAM_BUF_SIZE]> = Mutex::new([0u8; CAM_BUF_SIZE]);
@@ -56,7 +56,8 @@ const INPUT_SIZE: usize = INPUT_W * INPUT_H * INPUT_C;
 
 const SMALL_W: usize = CAM_W;
 const SMALL_H: usize = CAM_H;
-const PAD: usize = (INPUT_W - SMALL_W) / 2;
+// const PAD: usize = (INPUT_W - SMALL_W) / 2;
+const PAD: usize = 0;
 
 #[repr(align(16))]
 struct Aligned<const N: usize>([u8; N]);
@@ -197,7 +198,7 @@ fn preprocess_rgb565be_128_to_rgb888_244_center_and_qint8(
 ) {
     // 240→128 の center crop
     let src_off = (CAM_W - SMALL_W) / 2; // = 56
-
+    
     for y in 0..SMALL_H {
         let sy = y + src_off;
         let mut si = (sy * CAM_W + src_off) * 2;
@@ -232,9 +233,9 @@ fn preprocess_rgb565be_128_to_rgb888_244_center_and_qint8(
             // dst_rgb888[di + 1] = g;
             // dst_rgb888[di + 2] = b;
 
-            dst_qint8[di + 0] = (r >> 1) as u8;
-            dst_qint8[di + 1] = (g >> 1) as u8;
-            dst_qint8[di + 2] = (b >> 1) as u8;
+            // dst_qint8[di + 0] = (r >> 1) as u8;
+            // dst_qint8[di + 1] = (g >> 1) as u8;
+            // dst_qint8[di + 2] = (b >> 1) as u8;
             di += 3;
         }
     }
@@ -520,7 +521,7 @@ pub extern "C" fn _start() -> () {
     let _ = WasmI2c::new(config);
 
     // ---- Camera init (RGB565 240x240)
-    let camera = match Camera::init(PixelFormat::RGB565, FrameSize::Size128x128, 12) {
+    let camera = match Camera::init(CameraDeviceType::GC0308, PixelFormat::RGB565, FrameSize::Size240x240, 12) {
         Ok(cam) => cam,
         Err(_) => return,
     };
@@ -534,8 +535,10 @@ pub extern "C" fn _start() -> () {
     // ---- Main loop
     let mut rgb_guard = RGB888_224.lock();
     let mut in_guard = INPUT.lock();
+    let mut cam_guard = CAM_BUF.lock();
     let rgb888: &mut [u8; IMG_SIZE] = &mut rgb_guard.0;
     let input_q: &mut [u8; INPUT_SIZE] = &mut in_guard.0;
+    let cam_buf: &mut [u8; CAM_BUF_SIZE] = &mut *cam_guard;
 
     for v in input_q.iter_mut() {
         *v = 0;
@@ -548,8 +551,6 @@ pub extern "C" fn _start() -> () {
                 *v = 0;
             }
 
-            let mut cam_guard = CAM_BUF.lock();
-            let cam_buf: &mut [u8; CAM_BUF_SIZE] = &mut *cam_guard;
 
             let n = match camera.get(cam_buf) {
                 Ok(n) => n as usize,
@@ -560,8 +561,8 @@ pub extern "C" fn _start() -> () {
             // ---- Convert RGB565(240) -> RGB888(224 crop)
             {
                 // ---- Preprocess RGB888 -> qint8 input
-                // preprocess_rgb565be_240_to_rgb888_224_and_qint8(cam_buf, rgb888, input_q);
-                preprocess_rgb565be_128_to_rgb888_244_center_and_qint8(cam_buf, rgb888, input_q);
+                preprocess_rgb565be_240_to_rgb888_224_and_qint8(cam_buf, rgb888, input_q);
+                // preprocess_rgb565be_128_to_rgb888_244_center_and_qint8(cam_buf, rgb888, input_q);
 
                 let rc = unsafe { set_input_simple(input_q.as_ptr() as u32, INPUT_SIZE as u32) };
                 if rc != 0 { return; }

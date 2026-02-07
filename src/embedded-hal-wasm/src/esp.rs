@@ -32,20 +32,13 @@ pub enum PixelFormat {
 pub enum FrameSize {
     Size96x96 = 0, // 96x96
     SizeQQVGA = 1, // 160x120
-    Size128x128 = 2, // 128x128
-    SizeQCIF = 3, // 176x144
-    SizeHQVGA = 4, // 240x176
-    Size240x240 = 5, // 240x240
-    SizeQVGA = 6, // 320x240
-    Size320x320 = 7, // 320x320
-    SizeCIF = 8, // 400x296
-    SizeHVGA = 9, // 480x320
-    SizeVGA = 10, // 640x480
-    SizeSVGA = 11, // 800x600
-    SizeXGA = 12, // 1024x768
-    SizeHD = 13, // 1280x720
-    SizeSXGA = 14, // 1280x1024
-    SizeUXGA = 15, // 1600x1200
+    SizeQCIF = 2, // 176x144
+    SizeHQVGA = 3, // 240x176
+    Size240x240 = 4, // 240x240
+    SizeQVGA = 5, // 320x240
+    SizeCIF = 6, // 400x296
+    SizeHVGA = 7, // 480x320
+    SizeVGA = 8, // 640x480
 }
 
 
