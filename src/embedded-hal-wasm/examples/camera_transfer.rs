@@ -8,8 +8,8 @@ use embedded_hal_wasm::esp::{Camera, FrameSize, PixelFormat, CameraDeviceType};
 use embedded_hal_wasm::http_client::{HttpClient, Method};
 use embedded_hal_wasm::digital::WasmGpioPin;
 use embedded_hal_wasm::i2c::WasmI2c;
-// use embedded_hal::delay::DelayNs;
-// use embedded_hal_wasm::delay::WasmDelay;
+use embedded_hal::delay::DelayNs;
+use embedded_hal_wasm::delay::WasmDelay;
 // ======================
 // Network
 // ======================
@@ -22,12 +22,24 @@ const RAW_HDR_SIZE: usize = 12;
 // ======================
 // Camera (QQVGA = 160x120 RGB565)
 // ======================
-const CAM_W: usize = 160;
-const CAM_H: usize = 120;
+const CAM_W: usize = 128;
+const CAM_H: usize = 128;
 const CAM_BPP: usize = 2;
 const CAM_BUF_SIZE: usize = CAM_W * CAM_H * CAM_BPP;
 
 static CAM_BUF: Mutex<[u8; CAM_BUF_SIZE]> = Mutex::new([0u8; CAM_BUF_SIZE]);
+
+const HDR: [u8; RAW_HDR_SIZE] = {
+    let w = CAM_W as u16;
+    let h = CAM_H as u16;
+    [
+        b'R', b'5', b'6', b'5',
+        (w >> 8) as u8, (w & 0xFF) as u8,
+        (h >> 8) as u8, (h & 0xFF) as u8,
+        0, 0, 0, 0
+    ]
+};
+
 
 // ======================
 // I2C
@@ -63,19 +75,19 @@ fn post_rgb565_stream(
     client.open(Method::Post, contents_len).map_err(|_| ())?;
 
     // 12B header をスタック上に作る（小さいのでOK）
-    let mut hdr = [0u8; RAW_HDR_SIZE];
-    hdr[0..4].copy_from_slice(b"R565");
-    hdr[4] = ((CAM_W as u16) >> 8) as u8;
-    hdr[5] = ((CAM_W as u16) & 0xFF) as u8;
-    hdr[6] = ((CAM_H as u16) >> 8) as u8;
-    hdr[7] = ((CAM_H as u16) & 0xFF) as u8;
-    hdr[8] = 0; hdr[9] = 0; hdr[10] = 0; hdr[11] = 0;
+    // let mut hdr = [0u8; RAW_HDR_SIZE];
+    // hdr[0..4].copy_from_slice(b"R565");
+    // hdr[4] = ((CAM_W as u16) >> 8) as u8;
+    // hdr[5] = ((CAM_W as u16) & 0xFF) as u8;
+    // hdr[6] = ((CAM_H as u16) >> 8) as u8;
+    // hdr[7] = ((CAM_H as u16) & 0xFF) as u8;
+    // hdr[8] = 0; hdr[9] = 0; hdr[10] = 0; hdr[11] = 0;
 
     // ヘッダ → 画像 の順に送る（コピー不要）
-    write_all(client, &hdr)?;
+    write_all(client, &HDR)?;
     write_all(client, cam_buf)?;
 
-    let _ = client.fetch_headers();
+    // let _ = client.fetch_headers();
     Ok(client.status().map_err(|_| ())?)
 }
 
@@ -96,7 +108,8 @@ pub extern "C" fn _start() -> () {
     let _ = WasmI2c::new(config);
 
     // ---- Camera init (RGB565 240x240)
-    let camera = match Camera::init(CameraDeviceType::GC0308, PixelFormat::RGB565, FrameSize::SizeQQVGA, 12) {
+    // let camera = match Camera::init(CameraDeviceType::GC0308, PixelFormat::RGB565, FrameSize::SizeQQVGA, 12) {
+    let camera = match Camera::init(CameraDeviceType::GC0308, PixelFormat::RGB565, FrameSize::Size128x128, 12) {
         Ok(cam) => cam,
         Err(_) => return,
     };
@@ -113,6 +126,8 @@ pub extern "C" fn _start() -> () {
         Ok(client) => client,
         Err(_) => return,
     };
+    let mut delay = WasmDelay;
+    let duration_ns = 300_000_000;
     // let mut client = HttpClient::init(POST_URL, TIMEOUT_MS).unwrap();
     for _ in 0..10000 {
         // ---- Capture 1 frame
@@ -128,19 +143,7 @@ pub extern "C" fn _start() -> () {
                 return;
             }
         }
-        
-        // ---- Build packet & POST upload
-        // let mut post_guard = POST_BUF.lock();
-        // let post_buf: &mut [u8; POST_MAX] = &mut *post_guard;
-
-        // let body_len = build_rgb565_packet(cam_buf, post_buf);
-
-        // match post_raw_rgb565(&mut client, POST_URL, &post_buf[..body_len], body_len as i32) {
-        //     Ok(status) => println!("POST status={}", status),
-        //     Err(_) => println!("POST failed"),
-        // }
-        // let mut delay = WasmDelay;
-        // delay.delay_ns(100_000_000); // 0.1s
+        delay.delay_ns(duration_ns);
     }
     let _ = client.close();
 }
