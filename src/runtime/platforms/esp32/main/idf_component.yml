@@ -1,14 +1,14 @@
 ## IDF Component Manager Manifest File
 dependencies:
-  wasm-micro-runtime:
+  espressif/m5stack_core_s3: "^3.0.2"
+  espressif/esp32-camera: "^2.0.11"
+  espressif/esp-dl: ^3.2.4
+  wasm-micro-runtime-espressif:
     version: ^2
-    override_path: ../../../../../wasm-micro-runtime
+    override_path: ../../../../../wasm-micro-runtime-espressif
   idf:
     version: '>=4.4'
   espressif/esp-tflite-micro:
     version: '*'
     rules:
     - if: $CONFIG{USE_TFLM} == True
-  espressif/esp32-camera: "2.0.11"
-  espressif/esp-dl: ^3.2.4
-  espressif/m5stack_core_s3: "^3.0.2"

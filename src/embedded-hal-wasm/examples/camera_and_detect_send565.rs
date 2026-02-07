@@ -25,18 +25,20 @@ unsafe extern "C" {
 // ======================
 // Network
 // ======================
-const POST_URL: &str = "http://192.168.50.88:8000/upload";
+const POST_URL: &str = "http://192.168.10.111:8000/upload";
 const TIMEOUT_MS: i32 = 10_000;
-
+const RAW_HDR_SIZE: usize = 12;
+const POST_MAX: usize = RAW_HDR_SIZE + CAM_BUF_SIZE;
+static POST_BUF: Mutex<[u8; POST_MAX]> = Mutex::new([0u8; POST_MAX]);
 // ======================
 // Camera (240x240 RGB565)
 // ======================
-const CAM_W: usize = 96;
-const CAM_H: usize = 96;
+// const CAM_W: usize = 96;
+// const CAM_H: usize = 96;
 // const CAM_W: usize = 128;
 // const CAM_H: usize = 128;
-// const CAM_W: usize = 160;
-// const CAM_H: usize = 120;
+const CAM_W: usize = 160;
+const CAM_H: usize = 120;
 // const CAM_W: usize = 176;
 // const CAM_H: usize = 144;
 // const CAM_W: usize = 240;
@@ -70,10 +72,6 @@ struct Aligned<const N: usize>([u8; N]);
 
 // 推論入力 (qint8をu8で保持)
 static INPUT: Mutex<Aligned<INPUT_SIZE>> = Mutex::new(Aligned([0u8; INPUT_SIZE]));
-
-// 224x224 RGB888（描画＆PPM送信用）
-const IMG_SIZE: usize = INPUT_W * INPUT_H * 3;
-static RGB888_224: Mutex<Aligned<IMG_SIZE>> = Mutex::new(Aligned([0u8; IMG_SIZE]));
 
 // ======================
 // PicoDet outputs
@@ -109,33 +107,46 @@ const TOPK: usize = 10;
 // ======================
 // Upload PPM
 // ======================
-const PPM_MAX: usize = IMG_SIZE + 64;
-static POST_BUF: Mutex<[u8; PPM_MAX]> = Mutex::new([0u8; PPM_MAX]);
-
-fn post_ppm(client: &mut HttpClient, url: &str, ppm: &[u8], contents_len: i32) -> Result<i32, ()> {
-    client.set_header("Connection", "keep-alive").map_err(|_| ())?;
-    client.set_header("Content-Type", "image/x-portable-pixmap").map_err(|_| ())?;
+fn post_raw_rgb565(url: &str, body: &[u8], contents_len: i32) -> Result<i32, ()> {
+    let mut client = HttpClient::init(url, TIMEOUT_MS).map_err(|_| ())?;
+    client.set_header("Content-Type", "application/x-rgb565").map_err(|_| ())?;
     client.set_header("X-Device", "waiot-esp").map_err(|_| ())?;
     client.open(Method::Post, contents_len).map_err(|_| ())?;
 
     let mut off = 0usize;
-    while off < ppm.len() {
-        let n = client.write(&ppm[off..]).map_err(|_| ())?;
+    while off < body.len() {
+        let n = client.write(&body[off..]).map_err(|_| ())?;
         if n == 0 { return Err(()); }
         off += n;
     }
     let _ = client.fetch_headers();
     let status = client.status().map_err(|_| ())?;
+    let _ = client.close();
     Ok(status)
 }
 
-fn build_ppm_p6_224(src_rgb888: &[u8; IMG_SIZE], out: &mut [u8; PPM_MAX]) -> usize {
-    let header = b"P6\n224 224\n255\n";
-    let hlen = header.len();
-    out[..hlen].copy_from_slice(header);
-    out[hlen..hlen + IMG_SIZE].copy_from_slice(src_rgb888);
-    hlen + IMG_SIZE
+fn build_rgb565_packet(
+    src_rgb565: &[u8; CAM_BUF_SIZE],
+    out: &mut [u8; POST_MAX],
+) -> usize {
+    // header
+    out[0..4].copy_from_slice(b"R565");
+    out[4] = ((CAM_W as u16) >> 8) as u8;
+    out[5] = ((CAM_W as u16) & 0xFF) as u8;
+    out[6] = ((CAM_H as u16) >> 8) as u8;
+    out[7] = ((CAM_H as u16) & 0xFF) as u8;
+
+    // endian: 0=BE, 1=LE
+    out[8] = 0;
+    out[9] = 0;
+    out[10] = 0;
+    out[11] = 0;
+
+    // payload
+    out[RAW_HDR_SIZE..RAW_HDR_SIZE + CAM_BUF_SIZE].copy_from_slice(src_rgb565);
+    RAW_HDR_SIZE + CAM_BUF_SIZE
 }
+
 
 // ======================
 // Image conversion: 240x240 RGB565(LE) -> 224x224 RGB888 center crop
@@ -164,7 +175,6 @@ fn expand_6_to_8(v: u16) -> u8 {
 
 fn preprocess_rgb565be_240_to_rgb888_224_and_qint8(
     src: &[u8; CAM_BUF_SIZE],
-    dst_rgb888: &mut [u8; IMG_SIZE],
     dst_qint8: &mut [u8; INPUT_SIZE],
 ) {
     // crop offset: (240-224)/2 = 8
@@ -184,10 +194,6 @@ fn preprocess_rgb565be_240_to_rgb888_224_and_qint8(
             let g = expand_6_to_8(g6);
             let b = expand_5_to_8(b5);
             
-            dst_rgb888[di + 0] = r;
-            dst_rgb888[di + 1] = g;
-            dst_rgb888[di + 2] = b;
-
             dst_qint8[di + 0] = r >> 1;
             dst_qint8[di + 1] = g >> 1;
             dst_qint8[di + 2] = b >> 1;
@@ -198,7 +204,6 @@ fn preprocess_rgb565be_240_to_rgb888_224_and_qint8(
 
 fn preprocess_rgb565be_128_to_rgb888_244_center_and_qint8(
     src: &[u8; CAM_BUF_SIZE],
-    dst_rgb888: &mut [u8; IMG_SIZE],
     dst_qint8: &mut [u8; INPUT_SIZE],
 ) {
     // 240→128 の center crop
@@ -234,60 +239,10 @@ fn preprocess_rgb565be_128_to_rgb888_244_center_and_qint8(
             // let dx = x + PAD;
             // let dy = y + PAD;
             // let di = (dy * INPUT_W + dx) * 3;
-
-            dst_rgb888[di + 0] = r;
-            dst_rgb888[di + 1] = g;
-            dst_rgb888[di + 2] = b;
-
             dst_qint8[di + 0] = (r >> 1) as u8;
             dst_qint8[di + 1] = (g >> 1) as u8;
             dst_qint8[di + 2] = (b >> 1) as u8;
             di += 3;
-        }
-    }
-}
-
-
-// ======================
-// Drawing helpers
-// ======================
-#[inline]
-fn clamp_i32(v: i32, lo: i32, hi: i32) -> i32 {
-    if v < lo { lo } else if v > hi { hi } else { v }
-}
-
-fn put_px(img: &mut [u8; IMG_SIZE], x: i32, y: i32, r: u8, g: u8, b: u8) {
-    if x < 0 || y < 0 || x >= INPUT_W as i32 || y >= INPUT_H as i32 { return; }
-    let idx = ((y as usize) * INPUT_W + (x as usize)) * 3;
-    img[idx + 0] = r;
-    img[idx + 1] = g;
-    img[idx + 2] = b;
-}
-
-fn draw_rect_rgb888(img: &mut [u8; IMG_SIZE], mut x1: i32, mut y1: i32, mut x2: i32, mut y2: i32) {
-    x1 = clamp_i32(x1, 0, (INPUT_W as i32) - 1);
-    y1 = clamp_i32(y1, 0, (INPUT_H as i32) - 1);
-    x2 = clamp_i32(x2, 0, (INPUT_W as i32) - 1);
-    y2 = clamp_i32(y2, 0, (INPUT_H as i32) - 1);
-    if x2 < x1 { core::mem::swap(&mut x1, &mut x2); }
-    if y2 < y1 { core::mem::swap(&mut y1, &mut y2); }
-
-    let t = 2;
-    let (r, g, b) = (255u8, 0u8, 0u8);
-
-    for k in 0..t {
-        let yy1 = y1 + k;
-        let yy2 = y2 - k;
-        let xx1 = x1 + k;
-        let xx2 = x2 - k;
-
-        for x in xx1..=xx2 {
-            put_px(img, x, yy1, r, g, b);
-            put_px(img, x, yy2, r, g, b);
-        }
-        for y in yy1..=yy2 {
-            put_px(img, xx1, y, r, g, b);
-            put_px(img, xx2, y, r, g, b);
         }
     }
 }
@@ -528,7 +483,7 @@ pub extern "C" fn _start() -> () {
 
     // ---- Camera init (RGB565 240x240)
     // let camera = match Camera::init(CameraDeviceType::GC0308, PixelFormat::RGB565, FrameSize::Size240x240, 12) {
-    let camera = match Camera::init(CameraDeviceType::GC0308, PixelFormat::RGB565, FrameSize::Size96x96, 12) {
+    let camera = match Camera::init(CameraDeviceType::GC0308, PixelFormat::RGB565, FrameSize::SizeQQVGA, 12) {
         Ok(cam) => cam,
         Err(_) => return,
     };
@@ -540,29 +495,18 @@ pub extern "C" fn _start() -> () {
     if rc != 0 { return; }
 
     // ---- Main loop
-    let mut rgb_guard = RGB888_224.lock();
     let mut in_guard = INPUT.lock();
     let mut cam_guard = CAM_BUF.lock();
-    let rgb888: &mut [u8; IMG_SIZE] = &mut rgb_guard.0;
     let input_q: &mut [u8; INPUT_SIZE] = &mut in_guard.0;
     let cam_buf: &mut [u8; CAM_BUF_SIZE] = &mut *cam_guard;
 
     for v in input_q.iter_mut() {
         *v = 0;
     }
-    let mut client = match HttpClient::init(POST_URL, TIMEOUT_MS) {
-        Ok(c) => c,
-        Err(_) => return,
-    };
     for _ in 0..100 {
 
         // ---- Capture 1 frame
         {
-            for v in rgb888.iter_mut() {
-                *v = 0;
-            }
-
-
             let n = match camera.get(cam_buf) {
                 Ok(n) => n as usize,
                 Err(_) => return,
@@ -573,7 +517,7 @@ pub extern "C" fn _start() -> () {
             {
                 // ---- Preprocess RGB888 -> qint8 input
                 // preprocess_rgb565be_240_to_rgb888_224_and_qint8(cam_buf, rgb888, input_q);
-                preprocess_rgb565be_128_to_rgb888_244_center_and_qint8(cam_buf, rgb888, input_q);
+                preprocess_rgb565be_128_to_rgb888_244_center_and_qint8(cam_buf, input_q);
 
                 let rc = unsafe { set_input_simple(input_q.as_ptr() as u32, INPUT_SIZE as u32) };
                 if rc != 0 { return; }
@@ -602,29 +546,23 @@ pub extern "C" fn _start() -> () {
             if unsafe { get_output_simple(4, g_score1.0.as_mut_ptr() as u32, SCORE1_SIZE as u32) } != 0 { return; }
             if unsafe { get_output_simple(5, g_score2.0.as_mut_ptr() as u32, SCORE2_SIZE as u32) } != 0 { return; }
 
-            let det_count = postprocess_pico(
+            let _det_count = postprocess_pico(
                 &g_score0.0, &g_bbox0.0,
                 &g_score1.0, &g_bbox1.0,
                 &g_score2.0, &g_bbox2.0,
             );
 
             // ---- Draw & upload PPM
-            let dets_guard = DETS.lock();
-            let dets = &*dets_guard;
-
-            for i in 0..det_count {
-                let b = dets[i].b;
-                draw_rect_rgb888(rgb888, b.x1, b.y1, b.x2, b.y2);
-            }
-
+            
             let mut post_guard = POST_BUF.lock();
-            let post_buf: &mut [u8; PPM_MAX] = &mut *post_guard;
+            let post_buf: &mut [u8; POST_MAX] = &mut *post_guard;
 
             // ---- Build PPM
-            let n = build_ppm_p6_224(rgb888, post_buf);
+            let body_len = build_rgb565_packet(cam_buf, post_buf);
+
 
             // ---- POST upload
-            match post_ppm(&mut client, POST_URL, &post_buf[..n], n as i32) {
+            match post_raw_rgb565(POST_URL, &post_buf[..body_len], body_len as i32) {
                 Ok(status) => println!("POST status={}", status),
                 Err(_) => println!("POST failed"),
             }
@@ -634,5 +572,4 @@ pub extern "C" fn _start() -> () {
         // let mut delay = WasmDelay;
         // delay.delay_ns(100_000_000); // 0.1s
     }
-    let _ = client.close();
 }

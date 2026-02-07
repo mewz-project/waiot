@@ -801,7 +801,6 @@ int32_t if_camera_config_changed(wasm_exec_env_t exec_env, int pixel_format, int
     }
     return 1; // Config changed
 }
-#include "bsp/m5stack_core_s3.h"
 int32_t camera_init(wasm_exec_env_t exec_env, int camera_device_type, int pixel_format, int frame_size, int jpeg_quality)
 {
     if (has_camera_initialized)
@@ -882,11 +881,11 @@ int32_t camera_init(wasm_exec_env_t exec_env, int camera_device_type, int pixel_
     config.pixel_format = (pixformat_t)pixel_format;
     config.frame_size = (framesize_t)frame_size;
     config.jpeg_quality = jpeg_quality;
-    config.fb_count = 1;
+    config.fb_count = 2;
     config.fb_location = CAMERA_FB_IN_PSRAM;
-    config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+    config.grab_mode = CAMERA_GRAB_LATEST;
 
-    // Try to use PSRAM for frame buffer if available
+        // Try to use PSRAM for frame buffer if available
         /*
         if (has_psram())
         {
@@ -900,7 +899,7 @@ int32_t camera_init(wasm_exec_env_t exec_env, int camera_device_type, int pixel_
         }
         */
 
-    esp_log_level_set("camera", ESP_LOG_DEBUG);
+        esp_log_level_set("camera", ESP_LOG_DEBUG);
     esp_log_level_set("sccb", ESP_LOG_DEBUG);
 
     esp_err_t err = esp_camera_init(&config);

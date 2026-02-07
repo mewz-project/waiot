@@ -210,7 +210,26 @@ void init_wamr()
     }
 #endif // CONFIG_USE_TFLM
 }
+static void dump_heap_caps(void)
+{
+    ESP_LOGI("MEM", "free(8bit)=%u, largest(8bit)=%u",
+             heap_caps_get_free_size(MALLOC_CAP_8BIT),
+             heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
 
+    ESP_LOGI("MEM", "free(internal)=%u, largest(internal)=%u",
+             heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+
+#if CONFIG_SPIRAM
+    ESP_LOGI("MEM", "free(psram)=%u, largest(psram)=%u",
+             heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+             heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+#endif
+
+    ESP_LOGI("MEM", "free(exec)=%u, largest(exec)=%u",
+             heap_caps_get_free_size(MALLOC_CAP_EXEC),
+             heap_caps_get_largest_free_block(MALLOC_CAP_EXEC));
+}
 void *
 run_wamr()
 {
@@ -234,8 +253,10 @@ run_wamr()
         pthread_mutex_unlock(&g_wamr_thread_mu);
         goto done;
     }
+    dump_heap_caps();
     wasm_file_buf_size = g_uploaded_size;
-    wasm_file_buf = malloc(g_uploaded_size);
+    // wasm_file_buf = malloc(g_uploaded_size);
+    wasm_file_buf = heap_caps_malloc(wasm_file_buf_size, MALLOC_CAP_8BIT);
     if (!wasm_file_buf)
     {
         ESP_LOGE(LOG_TAG, "Failed allocating %d bytes for Wasm binary",
@@ -388,14 +409,26 @@ esp_err_t receive_wasm_binary(httpd_req_t *req)
         return httpd_resp_send_err(req, HTTPD_413_CONTENT_TOO_LARGE,
                                     "File too large");
     }
+    ESP_LOGI(LOG_TAG, "Receiving Wasm binary: %d bytes", (int)req->content_len);
 
     // Allocate buffer
-    uint8_t *buf = (uint8_t *)malloc(req->content_len + 1);
-    if (!buf)
+    size_t size = req->content_len;  // AOT の実サイズ
+    uint8_t *raw = malloc(size + 4); // 余分に確保（+4で十分）
+    if (!raw)
     {
-        ESP_LOGE(LOG_TAG, "OOM while allocating %d bytes", (int)req->content_len);
+        ESP_LOGE(LOG_TAG, "OOM while allocating %u bytes", (unsigned)size);
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
     }
+
+    // 4byte アライメントを取る
+    uintptr_t p = (uintptr_t)raw;
+    uint8_t *buf = (uint8_t *)((p + 3) & ~(uintptr_t)3);
+    // uint8_t *buf = (uint8_t *)malloc(req->content_len + 1);
+    // if (!buf)
+    // {
+    //     ESP_LOGE(LOG_TAG, "OOM while allocating %d bytes", (int)req->content_len);
+    //     return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
+    // }
 
     // Read data
     size_t remaining = req->content_len;
@@ -423,6 +456,7 @@ esp_err_t receive_wasm_binary(httpd_req_t *req)
         remaining -= r;
     }
     buf[offset] = 0;
+    ESP_LOGI(LOG_TAG, "Received Wasm binary: %d bytes", (int)offset);
 
     // Lock mutex
     pthread_mutex_lock(&g_wamr_thread_mu);

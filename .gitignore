@@ -3,6 +3,7 @@
 **/build/
 **/target/
 
+**/build-*
 .pytest_cache/
 __pycache__/
 
