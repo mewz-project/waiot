@@ -16,12 +16,21 @@
 #include "esp_system.h"
 #include "esp_log.h"
 
+#include <stdatomic.h>
+#include <pthread.h>
+
+// Wasm binary upload buffer
 static uint8_t *g_uploaded_data = NULL;
 static size_t g_uploaded_size = 0;
-static uint8_t *wasm_file_buf = NULL;
 
+// WAMR module and instance
 wasm_module_inst_t wasm_module_inst = NULL;
 pthread_t thread_wamr;
+
+// Flags for thread management
+static atomic_bool g_wamr_thread_running = ATOMIC_VAR_INIT(false);
+static atomic_bool g_wamr_thread_joined = ATOMIC_VAR_INIT(true);
+static pthread_mutex_t g_wamr_thread_mu = PTHREAD_MUTEX_INITIALIZER;
 
 /* ===== Wasm ===== */
 static NativeSymbol i2c_syms[] = {
@@ -151,48 +160,50 @@ void init_wamr()
 #endif // CONFIG_USE_TFLM
 }
 
-void cleanup_wamr()
-{
-    ESP_LOGI(LOG_TAG, "Cleanup WASM runtime");
-    print_free_heap();
-    if (wasm_module_inst)
-    {
-        ESP_LOGI("wamr", "before deinstantiate");
-        wasm_runtime_deinstantiate(wasm_module_inst);
-        wasm_module_inst = NULL;
-        free(wasm_file_buf);
-        ESP_LOGI("wamr", "after deinstantiate");
-    }
-    else
-    {
-        ESP_LOGE("wamr", "no module instance to deinstantiate");
-    }
-    print_free_heap();
-}
-
 void *
 run_wamr()
 {
+    atomic_store(&g_wamr_thread_running, true);
+
     unsigned wasm_file_buf_size = 0;
+    uint8_t *wasm_file_buf = NULL;
+
     wasm_module_t wasm_module = NULL;
     char error_buf[128];
+    bool if_created_env = false;
 
     ESP_LOGI(LOG_TAG, "Run wamr with interpreter");
     print_free_heap();
 
     // TODO: Why Wasm binary is overwritten?
+    pthread_mutex_lock(&g_wamr_thread_mu);
+    if (!g_uploaded_data || g_uploaded_size == 0)
+    {
+        ESP_LOGE(LOG_TAG, "No Wasm binary uploaded");
+        pthread_mutex_unlock(&g_wamr_thread_mu);
+        goto done;
+    }
     wasm_file_buf_size = g_uploaded_size;
     wasm_file_buf = malloc(g_uploaded_size);
+    if (!wasm_file_buf)
+    {
+        ESP_LOGE(LOG_TAG, "Failed allocating %d bytes for Wasm binary",
+                 (int)g_uploaded_size);
+        pthread_mutex_unlock(&g_wamr_thread_mu);
+        goto done;
+    }
     memcpy(wasm_file_buf, g_uploaded_data, g_uploaded_size);
+    pthread_mutex_unlock(&g_wamr_thread_mu);
 
-    /* load WASM module */
+    // load WASM module
     if (!(wasm_module = wasm_runtime_load(wasm_file_buf, wasm_file_buf_size,
                                           error_buf, sizeof(error_buf))))
     {
         ESP_LOGE(LOG_TAG, "Error in wasm_runtime_load: %s", error_buf);
-        goto fail;
+        goto done;
     }
 
+    // instantiate WASM module
     ESP_LOGI(LOG_TAG, "Instantiate WASM runtime");
     if (!(wasm_module_inst =
               wasm_runtime_instantiate(wasm_module, 32 * 1024, // stack size
@@ -200,7 +211,7 @@ run_wamr()
                                        error_buf, sizeof(error_buf))))
     {
         ESP_LOGE(LOG_TAG, "Error while instantiating: %s", error_buf);
-        goto fail;
+        goto done;
     }
 
     // creating env is required for wasm_runtime_terminate
@@ -208,66 +219,106 @@ run_wamr()
     if (!exec_env)
     {
         ESP_LOGE(LOG_TAG, "Failed to get exec env");
-        goto fail;
+        goto done;
     }
 
-    bool ok = wasm_runtime_init_thread_env();
-    if (!ok)
+    if (!wasm_runtime_init_thread_env())
     {
         ESP_LOGE(LOG_TAG, "Failed to init thread env");
-        goto fail;
+        goto done;
     }
+    if_created_env = true;
 
     // run main()
     // Once wasm_runtime_terminate is call, this function returns at the next safe point.
-    ok = wasm_application_execute_main(wasm_module_inst, 0, NULL);
-    if (!ok)
+    if (!wasm_application_execute_main(wasm_module_inst, 0, NULL))
     {
         ESP_LOGE(LOG_TAG, "Failed to execute main()");
-        goto fail;
+        goto done;
     }
 
-    // Destroy thread environment
-    wasm_runtime_destroy_thread_env();
+done:
+    if (wasm_module_inst)
+    {
+        wasm_runtime_deinstantiate(wasm_module_inst);
+        wasm_module_inst = NULL;
+    }
+    if (wasm_module) {
+        wasm_runtime_unload(wasm_module);
+        wasm_module = NULL;
+    }
+    if (wasm_file_buf) {
+        free(wasm_file_buf);
+        wasm_file_buf = NULL;
+    }
+    if (if_created_env)
+    {
+        wasm_runtime_destroy_thread_env();
+    }
+    print_free_heap();
 
-    // Cleanup
-    cleanup_wamr();
-
-fail:
-    ESP_LOGI(LOG_TAG, "Unload WASM module");
-    wasm_runtime_unload(wasm_module);
-    cleanup_wamr();
+    atomic_store(&g_wamr_thread_running, false);
     return NULL;
 }
 
 void stop_current_wasm_instance()
 {
+    pthread_t t_for_join = 0;
+    bool need_join = false;
+
+    pthread_mutex_lock(&g_wamr_thread_mu);
+
+    // Terminate the runtime if still running
     if (wasm_module_inst)
     {
         ESP_LOGW(LOG_TAG, "Terminating previous Wasm runtime…");
-        print_free_heap();
-
         wasm_runtime_terminate(wasm_module_inst);
-
-        // Wait for the previous thread to finish
-        pthread_join(thread_wamr, NULL);
-
-        ESP_LOGI(LOG_TAG, "Previous Wasm runtime terminated.");
-        print_free_heap();
     }
+
+    // Check if we need to join and keep the thread handle
+    if (!atomic_load(&g_wamr_thread_joined))
+    {
+        t_for_join = thread_wamr;
+        need_join = true;
+        atomic_store(&g_wamr_thread_joined, true);
+    }
+    pthread_mutex_unlock(&g_wamr_thread_mu);
+
+    // Join outside of mutex
+    if (need_join) {
+        pthread_join(t_for_join, NULL);
+        ESP_LOGI(LOG_TAG, "Previous Wasm runtime terminated/joined.");
+    }
+
+    print_free_heap();
 }
 
 void launch_new_wasm_instance()
 {
     pthread_attr_t tattr;
     pthread_attr_init(&tattr);
-    pthread_attr_setdetachstate(&tattr, PTHREAD_CREATE_DETACHED);
     pthread_attr_setstacksize(&tattr, IWASM_MAIN_STACK_SIZE);
+
+    // Join previous thread
+    pthread_mutex_lock(&g_wamr_thread_mu);
+    if (!atomic_load(&g_wamr_thread_running) && !atomic_load(&g_wamr_thread_joined))
+    {
+        pthread_join(thread_wamr, NULL);
+        atomic_store(&g_wamr_thread_joined, true);
+    }
 
     // Start the thread
     // Don't wait for finish because it may run forever.
+    atomic_store(&g_wamr_thread_joined, false);
     int res = pthread_create(&thread_wamr, &tattr, run_wamr, (void *)NULL);
-    assert(res == 0);
+    if (res != 0)
+    {
+        ESP_LOGE(LOG_TAG, "Failed to create WAMR thread: %d", res);
+        atomic_store(&g_wamr_thread_joined, true);
+    }
+    
+    pthread_mutex_unlock(&g_wamr_thread_mu);
+    
     pthread_attr_destroy(&tattr);
 }
 
@@ -283,15 +334,7 @@ esp_err_t receive_wasm_binary(httpd_req_t *req)
         ESP_LOGW(LOG_TAG, "Upload too large: %d > %d", (int)req->content_len,
                  (int)REGISTER_MAX_UPLOAD_SIZE);
         return httpd_resp_send_err(req, HTTPD_413_CONTENT_TOO_LARGE,
-                                   "File too large");
-    }
-
-    // Cleanup previous wasm
-    if (g_uploaded_data)
-    {
-        free(g_uploaded_data);
-        g_uploaded_data = NULL;
-        g_uploaded_size = 0;
+                                    "File too large");
     }
 
     // Allocate buffer
@@ -322,19 +365,45 @@ esp_err_t receive_wasm_binary(httpd_req_t *req)
             ESP_LOGE(LOG_TAG, "httpd_req_recv failed: %d", r);
             free(buf);
             return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
-                                       "recv failed");
+                                      "recv failed");
         }
         offset += r;
         remaining -= r;
     }
     buf[offset] = 0;
 
+    // Lock mutex
+    pthread_mutex_lock(&g_wamr_thread_mu);
+    
+    int ret;
+    
+    // Assert if current Wasm instance is not running
+    if (is_wasm_instance_running()) {
+        ESP_LOGW(LOG_TAG, "Cannot receive Wasm binary: instance is running");
+        ret = httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                      "Wasm instance is running");
+        free(buf);
+        goto out;
+    }
+
+    // Cleanup previous wasm
+    if (g_uploaded_data)
+    {
+        free(g_uploaded_data);
+        g_uploaded_data = NULL;
+        g_uploaded_size = 0;
+    }
+
+    // Replace with new wasm
     g_uploaded_data = buf;
     g_uploaded_size = offset;
-    return ESP_OK;
+    ret = ESP_OK;
+out:
+    pthread_mutex_unlock(&g_wamr_thread_mu);
+    return ret;
 }
 
 bool is_wasm_instance_running()
 {
-    return wasm_module_inst != NULL;
+    return atomic_load(&g_wamr_thread_running);
 }
