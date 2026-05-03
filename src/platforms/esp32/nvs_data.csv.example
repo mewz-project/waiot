@@ -1,0 +1,11 @@
+key,type,encoding,value
+config,namespace,,
+sta_ssid,data,string,example-sta-ssid
+sta_pass,data,string,example-sta-password
+ap_ssid,data,string,WaiotAP
+ap_pass,data,string,12345678
+sta_mode,data,u8,0
+device_name,data,string,m5stack
+kubelet_ep,data,string,192.168.0.10:8080
+cpu_info,data,string,1
+memory_info,data,string,1Mi

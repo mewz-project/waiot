@@ -69,27 +69,21 @@ extern "C"
 
     typedef struct
     {
-        wasi_nn_u32_list_t dimensions; // array of dimensions
+        wasi_nn_u32_list_t dimensions;
         uint8_t type;
         uint8_t _pad[3];
         wasi_nn_u8_list_t data;
     } tensor;
 
     int load(wasm_exec_env_t exec_env, graph_builder_array *builder, graph_encoding encoding,
-             execution_target target, /* out */ graph *g);
-
-    int load_by_name(wasm_exec_env_t exec_env, const char *name, uint32_t namelen, /* out */ graph *g);
-
-    int init_execution_context(wasm_exec_env_t exec_env, graph g, /* out */ graph_execution_context *exec_ctx);
-
+             execution_target target, graph *g);
+    int load_by_name(wasm_exec_env_t exec_env, const char *name, uint32_t namelen, graph *g);
+    int init_execution_context(wasm_exec_env_t exec_env, graph g, graph_execution_context *exec_ctx);
     int set_input(wasm_exec_env_t exec_env, uint32_t exec_ctx, uint32_t index,
                   const tensor *input_tensor);
-
     int compute(wasm_exec_env_t exec_env, graph_execution_context exec_ctx);
-
     int get_output(wasm_exec_env_t exec_env, uint32_t exec_ctx, uint32_t index,
-                   uint8_t *output_buff, uint32_t output_buff_max_size, /* out */ uint32_t *output_size);
-
+                   uint8_t *output_buff, uint32_t output_buff_max_size, uint32_t *output_size);
     int load_simple(wasm_exec_env_t exec_env, uint32_t model_ptr_idx, uint32_t model_size);
     int init_execution_context_simple(wasm_exec_env_t exec_env);
     int set_input_simple(wasm_exec_env_t exec_env, uint32_t input_ptr_idx, uint32_t input_size);

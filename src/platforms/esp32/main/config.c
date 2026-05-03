@@ -4,11 +4,12 @@
  */
 
 #include "config.h"
-#include "nvs_flash.h"
+
 #include "esp_log.h"
+#include "nvs_flash.h"
+
 #include <string.h>
 
-// Load WiFi configuration from NVS
 esp_err_t load_wifi_config_from_nvs(wifi_settings_t *config)
 {
     nvs_handle_t nvs_handle;
@@ -70,7 +71,6 @@ esp_err_t load_wifi_config_from_nvs(wifi_settings_t *config)
     return ESP_OK;
 }
 
-// Load device settings from NVS
 esp_err_t load_device_settings_from_nvs(device_settings_t *settings)
 {
     nvs_handle_t nvs_handle;
@@ -85,7 +85,6 @@ esp_err_t load_device_settings_from_nvs(device_settings_t *settings)
     }
     ESP_LOGI(LOG_TAG, "NVS handle opened successfully for device settings");
 
-    // Load device name
     required_size = sizeof(settings->device_name);
     err = nvs_get_str(nvs_handle, "device_name", settings->device_name, &required_size);
     if (err != ESP_OK) {
@@ -94,7 +93,6 @@ esp_err_t load_device_settings_from_nvs(device_settings_t *settings)
         return err;
     }
 
-    // Load kubelet endpoint
     required_size = sizeof(settings->kubelet_endpoint);
     err = nvs_get_str(nvs_handle, "kubelet_ep", settings->kubelet_endpoint, &required_size);
     if (err != ESP_OK) {
@@ -103,7 +101,6 @@ esp_err_t load_device_settings_from_nvs(device_settings_t *settings)
         return err;
     }
 
-    // Load CPU info
     required_size = sizeof(settings->cpu_info);
     err = nvs_get_str(nvs_handle, "cpu_info", settings->cpu_info, &required_size);
     if (err != ESP_OK) {
@@ -112,7 +109,6 @@ esp_err_t load_device_settings_from_nvs(device_settings_t *settings)
         return err;
     }
 
-    // Load memory info
     required_size = sizeof(settings->memory_info);
     err = nvs_get_str(nvs_handle, "memory_info", settings->memory_info, &required_size);
     if (err != ESP_OK) {

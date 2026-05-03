@@ -2,7 +2,7 @@
 dependencies:
   wasm-micro-runtime:
     version: ^2
-    override_path: ../../../../../wasm-micro-runtime
+    override_path: ../../../../wasm-micro-runtime
   idf:
     version: '>=4.4'
   espressif/esp-tflite-micro:

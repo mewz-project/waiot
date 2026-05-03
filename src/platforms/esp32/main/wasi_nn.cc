@@ -1,11 +1,16 @@
 #include "wasi_nn.h"
 
-#include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
 #include "tensorflow/lite/micro/micro_interpreter.h"
+#include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
 #include "tensorflow/lite/micro/system_setup.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 
 #include "esp_log.h"
+
+#include <algorithm>
+#include <cstring>
+#include <string>
+#include <vector>
 
 const tflite::Model *model = nullptr;
 static std::vector<uint8_t> g_model_storage;
@@ -17,9 +22,6 @@ int inference_count = 0;
 
 static tflite::MicroMutableOpResolver<4> g_resolver;
 static bool g_ops_registered = false;
-// TODO
-// - Keep multiple graphs
-// - Keep multiple execution contexts
 
 constexpr int kTensorArenaSize = 10 * 1024;
 alignas(16) static uint8_t tensor_arena[kTensorArenaSize];
@@ -63,7 +65,6 @@ extern "C"
     void dump_model(const tflite::Model *model)
     {
         ESP_LOGI("wasi_nn", "dump_model:");
-
         ESP_LOGI("wasi_nn", "  Model version: %d", model->version());
         auto *subgraphs = model->subgraphs();
         if (subgraphs)
@@ -75,8 +76,6 @@ extern "C"
                 ESP_LOGI("wasi_nn", "    Subgraph %d name: %s", i,
                          subgraph->name() ? subgraph->name()->c_str() : "N/A");
                 ESP_LOGI("wasi_nn", "    Number of operators: %d", subgraph->operators()->size());
-
-                // In/Outputs
                 ESP_LOGI("wasi_nn", "    Number of inputs: %d", subgraph->inputs()->size());
                 for (uint32_t j = 0; j < subgraph->inputs()->size(); j++)
                 {
@@ -91,7 +90,6 @@ extern "C"
                     ESP_LOGI("wasi_nn", "      Output[%d]: tensor index=%d", j, out_idx);
                 }
 
-                // Tensors
                 ESP_LOGI("wasi_nn", "    Number of tensors: %d", subgraph->tensors()->size());
                 if (subgraph->tensors())
                 {
@@ -99,14 +97,10 @@ extern "C"
                     {
                         auto *tensor = subgraph->tensors()->Get(j);
                         if (!tensor)
-                        {
                             continue;
-                        }
-
                         const auto *tensor_name = tensor->name() ? tensor->name()->c_str() : "<noname>";
                         auto type = tensor->type();
                         auto shape = tensor->shape();
-
                         if (shape)
                         {
                             std::string dims;
@@ -114,9 +108,7 @@ extern "C"
                             {
                                 dims += std::to_string(shape->Get(d));
                                 if (d + 1 < shape->size())
-                                {
                                     dims += "x";
-                                }
                             }
                             ESP_LOGI("wasi_nn", "     Tensor[%d]: %s (Type=%d, Shape=%s)", j, tensor_name, type,
                                      dims.c_str());
@@ -145,10 +137,9 @@ extern "C"
             return invalid_argument;
         }
 
-        // Convert binary to TFLite model
         if (!wasm_runtime_validate_app_addr(instance, model_ptr_idx, model_size))
         {
-            ESP_LOGE("wasi_nn", "load_simple: invalid memory range\n");
+            ESP_LOGE("wasi_nn", "load_simple: invalid memory range");
             return invalid_argument;
         }
         char *src = (char *)wasm_runtime_addr_app_to_native(instance, model_ptr_idx);
@@ -158,7 +149,6 @@ extern "C"
 
         model = tflite::GetModel(g_model_storage.data());
 
-        // Verify model
         flatbuffers::Verifier v(g_model_storage.data(), g_model_storage.size());
         if (!tflite::VerifyModelBuffer(v))
         {
@@ -170,13 +160,11 @@ extern "C"
 
         ESP_LOGI("wasi_nn", "load: Model loaded successfully.");
         dump_model(model);
-
         return success;
     }
 
     int load_by_name(wasm_exec_env_t exec_env, const char *name, uint32_t namelen, graph *g)
     {
-
         ESP_LOGE("wasi_nn", "load_by_name is not implemented");
         return success;
     }
@@ -184,10 +172,8 @@ extern "C"
     int init_execution_context_simple(wasm_exec_env_t exec_env)
     {
         ESP_LOGI("wasi_nn", "init_execution_context_simple");
-
         dump_ops(model);
 
-        // Register operations
         ESP_LOGI("wasi_nn", "Registering ops");
         if (!g_ops_registered)
         {
@@ -201,13 +187,11 @@ extern "C"
             g_ops_registered = true;
         }
 
-        // Build the interpreter
         ESP_LOGI("wasi_nn", "Creating static interpreter");
         tflite::InitializeTarget();
         static tflite::MicroInterpreter static_interp = tflite::MicroInterpreter(model, g_resolver, tensor_arena, kTensorArenaSize);
         interpreter = &static_interp;
 
-        // Allocate memory for the model's tensors.
         ESP_LOGI("wasi_nn", "Allocating tensors");
         TfLiteStatus allocate_status = interpreter->AllocateTensors();
         if (allocate_status != kTfLiteOk)
@@ -219,8 +203,6 @@ extern "C"
         auto used = interpreter->arena_used_bytes();
         ESP_LOGI("wasi_nn", "Arena used: %u / %u", (unsigned)used, (unsigned)kTensorArenaSize);
 
-        // Obtain pointers to the model's input and output tensors.
-        ESP_LOGI("wasi_nn", "Obtaining input and output tensors");
         input = interpreter->input(0);
         output = interpreter->output(0);
         if (!input || !output)
@@ -231,15 +213,15 @@ extern "C"
         if (!tflite::GetTensorData<uint8_t>(input) || !tflite::GetTensorData<uint8_t>(output))
         {
             ESP_LOGE("wasi_nn", "Tensor pointers are null (input/output/data)");
-            ESP_LOGE("wasi_nn", "GetTensorData(input)=%p, GetTensorData(output)=%p", tflite::GetTensorData<uint8_t>(input), tflite::GetTensorData<uint8_t>(output));
+            ESP_LOGE("wasi_nn", "GetTensorData(input)=%p, GetTensorData(output)=%p",
+                     tflite::GetTensorData<uint8_t>(input),
+                     tflite::GetTensorData<uint8_t>(output));
             return runtime_error;
         }
         ESP_LOGI("wasi_nn", "Input tensor type: %d, bytes: %d, allocation_type=%d", input->type, input->bytes, input->allocation_type);
         ESP_LOGI("wasi_nn", "Output tensor type: %d, bytes: %d, allocation_type=%d", output->type, output->bytes, output->allocation_type);
 
-        // Keep track of how many inferences we have performed.
         inference_count = 0;
-
         return success;
     }
 
@@ -247,7 +229,7 @@ extern "C"
     {
         ESP_LOGI("wasi_nn", "init_execution_context");
         init_execution_context_simple(exec_env);
-        *exec_ctx = 0; // dummy execution context handle
+        *exec_ctx = 0;
         return success;
     }
 
@@ -262,7 +244,6 @@ extern "C"
     {
         ESP_LOGI("wasi_nn", "set_input_simple");
 
-        // Convert to native pointer
         wasm_module_inst_t instance = wasm_runtime_get_module_inst(exec_env);
         if (!instance)
         {
@@ -271,14 +252,13 @@ extern "C"
         }
         if (!wasm_runtime_validate_app_addr(instance, input_ptr_idx, input_size))
         {
-            ESP_LOGE("wasi_nn", "set_input_simple: invalid memory range\n");
+            ESP_LOGE("wasi_nn", "set_input_simple: invalid memory range");
             return invalid_argument;
         }
         char *buff = (char *)wasm_runtime_addr_app_to_native(instance, input_ptr_idx);
         ESP_LOGI("wasi_nn", "input[0]=%02x %02x %02x %02x", buff[0], buff[1], buff[2], buff[3]);
         ESP_LOGI("wasi_nn", "input_size=%d, expected=%d", input_size, input->bytes);
 
-        // Copy input data to TFLM input tensor
         memcpy(tflite::GetTensorData<uint8_t>(input), buff, std::min((size_t)input_size, input->bytes));
         return success;
     }
@@ -292,8 +272,6 @@ extern "C"
     int compute_simple(wasm_exec_env_t exec_env)
     {
         ESP_LOGI("wasi_nn", "compute_simple");
-
-        // Run inference
         TfLiteStatus invoke_status = interpreter->Invoke();
         if (invoke_status != kTfLiteOk)
         {
@@ -320,7 +298,6 @@ extern "C"
             return invalid_argument;
         }
 
-        // Convert to native pointer
         wasm_module_inst_t instance = wasm_runtime_get_module_inst(exec_env);
         if (!instance)
         {
@@ -329,12 +306,11 @@ extern "C"
         }
         if (!wasm_runtime_validate_app_addr(instance, output_ptr_idx, output->bytes))
         {
-            ESP_LOGE("wasi_nn", "get_output_simple: invalid memory range\n");
+            ESP_LOGE("wasi_nn", "get_output_simple: invalid memory range");
             return invalid_argument;
         }
         char *output_buff = (char *)wasm_runtime_addr_app_to_native(instance, output_ptr_idx);
 
-        // Copy output data from TFLM output tensor
         ESP_LOGI("wasi_nn", "output bytes=%d, output_buff_max_size=%d", output->bytes, output_buff_max_size);
         memcpy(output_buff, tflite::GetTensorData<uint8_t>(output), output->bytes);
         for (size_t i = 0; i < std::min((size_t)output->bytes, (size_t)16); ++i)
@@ -342,8 +318,6 @@ extern "C"
             ESP_LOGI("wasi_nn", " output[%zu]=%02x", i, (uint8_t)output_buff[i]);
         }
 
-        // For debugging:
-        // print first 4 bytes as float
         if (output->bytes >= 4)
         {
             float f;
@@ -353,5 +327,4 @@ extern "C"
 
         return success;
     }
-
-} // extern "C"
+}

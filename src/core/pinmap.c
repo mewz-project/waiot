@@ -1,9 +1,8 @@
 #include "pinmap.h"
 
 #include <stdlib.h>
-#include <string.h>
 
-int32_t *g_pin_mapping = NULL;
+static int32_t *g_pin_mapping = NULL;
 
 int32_t map_pin(int32_t virtual_pin)
 {
@@ -43,6 +42,8 @@ int pinmap_set_virtual_to_physical(int32_t virtual_pin, int32_t physical_pin)
     {
         pinmap_reset_identity();
     }
+    if (!g_pin_mapping)
+        return -1;
     g_pin_mapping[virtual_pin] = physical_pin;
     return 0;
 }

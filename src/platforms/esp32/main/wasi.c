@@ -1,19 +1,19 @@
 #include "wasi.h"
 
+#include "log.h"
+#include "pinmap.h"
+
 #include "driver/gpio.h"
 #include "driver/i2c.h"
 #include "driver/ledc.h"
 #include "esp_err.h"
-#include "esp_timer.h"
 #include "esp_log.h"
-#include "pinmap.h"
-#include <string.h>
+#include "esp_timer.h"
 
 typedef int32_t wasi_bus_handle_t;
 typedef int32_t wasi_gpio_handle_t;
 
 #define WASI_MAX_GPIO_PINS 16
-#define LOG_RING_BUF_SIZE (8 * 1024)
 
 typedef struct
 {
@@ -29,10 +29,6 @@ typedef struct
 
 static wasi_gpio_t s_gpio[WASI_MAX_GPIO_PINS];
 
-static uint8_t s_log_ring[LOG_RING_BUF_SIZE];
-static size_t s_log_write_pos = 0;
-static size_t s_log_filled = 0;
-
 static inline wasi_gpio_t *
 get_gpio(wasi_gpio_handle_t h)
 {
@@ -43,7 +39,6 @@ get_gpio(wasi_gpio_handle_t h)
     return s_gpio[h].used ? &s_gpio[h] : NULL;
 }
 
-//====================== I2C ======================
 int32_t waiot_i2c_param_config(wasm_exec_env_t exec_env, int32_t port,
                                int32_t sda_gpio, int32_t scl_gpio,
                                int32_t freq_hz)
@@ -56,11 +51,10 @@ int32_t waiot_i2c_param_config(wasm_exec_env_t exec_env, int32_t port,
                          .sda_pullup_en = GPIO_PULLUP_ENABLE,
                          .scl_pullup_en = GPIO_PULLUP_ENABLE,
                          .master.clk_speed = (uint32_t)freq_hz};
-    esp_err_t err;
-    err = i2c_param_config((i2c_port_t)port, &conf);
+    esp_err_t err = i2c_param_config((i2c_port_t)port, &conf);
     if (err != ESP_OK)
     {
-        ESP_LOGE("wasi_i2c", "i2c_param_config: i2c_param_config failed: %d", err);
+        ESP_LOGE("wasi_i2c", "i2c_param_config failed: %d", err);
         return -1;
     }
     return 0;
@@ -69,32 +63,31 @@ int32_t waiot_i2c_param_config(wasm_exec_env_t exec_env, int32_t port,
 int32_t waiot_i2c_driver_install(wasm_exec_env_t exec_env, int32_t port)
 {
     ESP_LOGI("wasi_i2c", "i2c_driver_install: port=%d", port);
-    esp_err_t err;
-    err = i2c_driver_install((i2c_port_t)port, I2C_MODE_MASTER, 0, 0, 0);
+    esp_err_t err = i2c_driver_install((i2c_port_t)port, I2C_MODE_MASTER, 0, 0, 0);
     if (err != ESP_OK)
     {
-        ESP_LOGE("wasi_i2c", "i2c_driver_install: i2c_driver_install failed: %d", err);
+        ESP_LOGE("wasi_i2c", "i2c_driver_install failed: %d", err);
         return -1;
     }
     return 0;
 }
 
 int32_t waiot_i2c_master_write(wasm_exec_env_t exec_env, int32_t port,
-                               int32_t addr, int32_t write_buff_ptr_idx, int32_t write_size, int32_t ticks_to_wait)
+                               int32_t addr, int32_t write_buff_ptr_idx,
+                               int32_t write_size, int32_t ticks_to_wait)
 {
-    // Convert to native pointer
     ESP_LOGI("wasi_i2c", "i2c_master_write: port=%d, addr=0x%02x, write_buff_ptr_idx=0x%08x, write_size=%d, ticks_to_wait=%d",
              port, addr, write_buff_ptr_idx, write_size, ticks_to_wait);
     wasm_module_inst_t instance = wasm_runtime_get_module_inst(exec_env);
     if (!instance)
     {
-        ESP_LOGE("wasi_i2c", "i2c_master_write: Failed to get module instance.");
+        ESP_LOGE("wasi_i2c", "Failed to get module instance.");
         return -1;
     }
 
     if (!wasm_runtime_validate_app_addr(instance, write_buff_ptr_idx, write_size))
     {
-        ESP_LOGE("wasi_i2c", "waiot_i2c_master_write: Invalid write buffer address.");
+        ESP_LOGE("wasi_i2c", "Invalid write buffer address.");
         return -1;
     }
 
@@ -103,45 +96,25 @@ int32_t waiot_i2c_master_write(wasm_exec_env_t exec_env, int32_t port,
                                                (const uint8_t *)write_buff,
                                                (size_t)write_size,
                                                (TickType_t)ticks_to_wait);
-    switch (err)
-    {
-    case ESP_OK:
-        break;
-    case ESP_ERR_INVALID_ARG:
-        ESP_LOGE("wasi_i2c", " Invalid argument");
-        break;
-    case ESP_FAIL:
-        ESP_LOGE("wasi_i2c", " Operation failed");
-        break;
-    case ESP_ERR_INVALID_STATE:
-        ESP_LOGE("wasi_i2c", " I2C driver not installed or not in master mode");
-        break;
-    case ESP_ERR_TIMEOUT:
-        ESP_LOGE("wasi_i2c", " Operation timeout");
-        break;
-    default:
-        ESP_LOGE("wasi_i2c", " Unknown error");
-        break;
-    }
     return (err == ESP_OK) ? 0 : -1;
 }
 
 int32_t waiot_i2c_master_read(wasm_exec_env_t exec_env, int32_t port,
-                              int32_t addr, int32_t read_buff_ptr_idx, int32_t read_size, int32_t ticks_to_wait)
+                              int32_t addr, int32_t read_buff_ptr_idx,
+                              int32_t read_size, int32_t ticks_to_wait)
 {
     ESP_LOGI("wasi_i2c", "i2c_master_read: port=%d, addr=0x%02x, read_buff_ptr_idx=0x%08x, read_size=%d, ticks_to_wait=%d",
              port, addr, read_buff_ptr_idx, read_size, ticks_to_wait);
-    // Convert to native pointer
     wasm_module_inst_t instance = wasm_runtime_get_module_inst(exec_env);
     if (!instance)
     {
-        ESP_LOGE("wasi_i2c", "i2c_master_read: Failed to get module instance.");
+        ESP_LOGE("wasi_i2c", "Failed to get module instance.");
         return -1;
     }
 
     if (!wasm_runtime_validate_app_addr(instance, read_buff_ptr_idx, read_size))
     {
-        ESP_LOGE("wasi_i2c", "waiot_i2c_master_read: Invalid read buffer address.");
+        ESP_LOGE("wasi_i2c", "Invalid read buffer address.");
         return -1;
     }
 
@@ -153,47 +126,37 @@ int32_t waiot_i2c_master_read(wasm_exec_env_t exec_env, int32_t port,
     return (err == ESP_OK) ? 0 : -1;
 }
 
-//====================== GPIO ======================
-
-int32_t
-gpio_set_pin_mode(wasm_exec_env_t exec_env, int32_t pin, int32_t dir)
+int32_t gpio_set_pin_mode(wasm_exec_env_t exec_env, int32_t pin, int32_t dir)
 {
     int32_t hw_pin = map_pin(pin);
     gpio_num_t p = (gpio_num_t)hw_pin;
     gpio_reset_pin(p);
     gpio_mode_t mode = (dir == 0) ? GPIO_MODE_INPUT : GPIO_MODE_OUTPUT;
-    gpio_pull_mode_t pm = GPIO_FLOATING;
     if (gpio_set_direction(p, mode) != ESP_OK)
     {
         return -1;
     }
-    if (gpio_set_pull_mode(p, pm) != ESP_OK)
+    if (gpio_set_pull_mode(p, GPIO_FLOATING) != ESP_OK)
     {
         return -1;
     }
     return 0;
 }
 
-int32_t
-gpio_read(wasm_exec_env_t exec_env, int32_t pin)
+int32_t gpio_read(wasm_exec_env_t exec_env, int32_t pin)
 {
     int32_t hw_pin = map_pin(pin);
     ESP_LOGI("WASI_GPIO", "gpio_read: virtual=%d mapped=%d", pin, hw_pin);
     return gpio_get_level(hw_pin);
 }
 
-int32_t
-gpio_write(wasm_exec_env_t exec_env, int32_t pin, int32_t value)
+int32_t gpio_write(wasm_exec_env_t exec_env, int32_t pin, int32_t value)
 {
     int32_t hw_pin = map_pin(pin);
     ESP_LOGI("WASI_GPIO", "gpio_write: virtual=%d mapped=%d value=%d", pin, hw_pin, value);
     return (gpio_set_level(hw_pin, value ? 1 : 0) == ESP_OK) ? 0 : -1;
 }
 
-// ====================== Delay ======================
-
-// Delay
-// Since ESP-IDF does not provide ns-level delay, we round up to us.
 int32_t delay_ns(wasm_exec_env_t exec_env, int32_t ns)
 {
     if (ns <= 0)
@@ -206,15 +169,13 @@ int32_t delay_ns(wasm_exec_env_t exec_env, int32_t ns)
     return 0;
 }
 
-// ====================== LEDC ======================
-
-int32_t pwm_init(wasm_exec_env_t exec_env, int32_t pin, int32_t channel, int32_t freq, int32_t resolution, int32_t speed_mode)
+int32_t pwm_init(wasm_exec_env_t exec_env, int32_t pin, int32_t channel,
+                 int32_t freq, int32_t resolution, int32_t speed_mode)
 {
-    int32_t hw_pin = map_pin((int32_t)pin);
+    int32_t hw_pin = map_pin(pin);
     ESP_LOGI("WASI_LEDC", "pwm_init: pin=%d mapped=%d, channel=%d, freq=%d, resolution=%d, speed_mode=%d",
              pin, hw_pin, channel, freq, resolution, speed_mode);
 
-    // --- Configure LEDC timer ---
     ledc_timer_config_t tcfg = {
         .speed_mode = (ledc_mode_t)speed_mode,
         .duty_resolution = (ledc_timer_bit_t)resolution,
@@ -224,14 +185,13 @@ int32_t pwm_init(wasm_exec_env_t exec_env, int32_t pin, int32_t channel, int32_t
     };
     ESP_ERROR_CHECK(ledc_timer_config(&tcfg));
 
-    // --- Configure LEDC channel ---
     ledc_channel_config_t ccfg = {
         .gpio_num = hw_pin,
         .speed_mode = (ledc_mode_t)speed_mode,
         .channel = channel,
         .intr_type = LEDC_INTR_DISABLE,
         .timer_sel = LEDC_TIMER_0,
-        .duty = 0, // start silent
+        .duty = 0,
         .hpoint = 0,
         .flags.output_invert = 0,
     };
@@ -239,7 +199,8 @@ int32_t pwm_init(wasm_exec_env_t exec_env, int32_t pin, int32_t channel, int32_t
     return 0;
 }
 
-int32_t pwm_set_duty(wasm_exec_env_t exec_env, int32_t channel, int32_t duty, int32_t speed_mode)
+int32_t pwm_set_duty(wasm_exec_env_t exec_env, int32_t channel, int32_t duty,
+                     int32_t speed_mode)
 {
     ESP_LOGI("WASI_LEDC", "pwm_set_duty: channel=%d, duty=%d, speed_mode=%d",
              channel, duty, speed_mode);
@@ -247,7 +208,8 @@ int32_t pwm_set_duty(wasm_exec_env_t exec_env, int32_t channel, int32_t duty, in
     return 0;
 }
 
-int32_t pwm_update_duty(wasm_exec_env_t exec_env, int32_t channel, int32_t speed_mode)
+int32_t pwm_update_duty(wasm_exec_env_t exec_env, int32_t channel,
+                        int32_t speed_mode)
 {
     ESP_LOGI("WASI_LEDC", "pwm_update_duty: channel=%d, speed_mode=%d",
              channel, speed_mode);
@@ -255,7 +217,8 @@ int32_t pwm_update_duty(wasm_exec_env_t exec_env, int32_t channel, int32_t speed
     return 0;
 }
 
-int32_t pwm_set_frequency(wasm_exec_env_t exec_env, int32_t channel, int32_t freq, int32_t speed_mode)
+int32_t pwm_set_frequency(wasm_exec_env_t exec_env, int32_t channel,
+                          int32_t freq, int32_t speed_mode)
 {
     ESP_LOGI("WASI_LEDC", "pwm_set_frequency: channel=%d, freq=%d, speed_mode=%d",
              channel, freq, speed_mode);
@@ -263,40 +226,14 @@ int32_t pwm_set_frequency(wasm_exec_env_t exec_env, int32_t channel, int32_t fre
     return 0;
 }
 
-// ====================== Logging (fd_write) ======================
-
-static void
-log_ring_append(const uint8_t *data, size_t len)
-{
-    while (len > 0)
-    {
-        size_t to_end = LOG_RING_BUF_SIZE - s_log_write_pos;
-        size_t chunk = len < to_end ? len : to_end;
-        memcpy(s_log_ring + s_log_write_pos, data, chunk);
-        s_log_write_pos = (s_log_write_pos + chunk) % LOG_RING_BUF_SIZE;
-        if (s_log_filled + chunk >= LOG_RING_BUF_SIZE)
-        {
-            s_log_filled = LOG_RING_BUF_SIZE;
-        }
-        else
-        {
-            s_log_filled += chunk;
-        }
-        data += chunk;
-        len -= chunk;
-    }
-}
-
-int32_t
-fd_write(wasm_exec_env_t exec_env, int32_t fd, int32_t buf_iovec_addr,
-         int32_t vec_len, int32_t size_addr)
+int32_t fd_write(wasm_exec_env_t exec_env, int32_t fd, int32_t buf_iovec_addr,
+                 int32_t vec_len, int32_t size_addr)
 {
     ESP_LOGI("wasi_fd", "fd_write: fd=%d, buf_iovec_addr=0x%08x, vec_len=%d, size_addr=0x%08x",
              fd, buf_iovec_addr, vec_len, size_addr);
-    // only stdout is supported
     if (fd != 1)
     {
-        return -1; 
+        return -1;
     }
 
     wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
@@ -304,7 +241,6 @@ fd_write(wasm_exec_env_t exec_env, int32_t fd, int32_t buf_iovec_addr,
     {
         return -2;
     }
-
     if (vec_len < 0)
     {
         return -3;
@@ -315,8 +251,7 @@ fd_write(wasm_exec_env_t exec_env, int32_t fd, int32_t buf_iovec_addr,
     {
         return -4;
     }
-    wasi_iovec_t *iovecs = (wasi_iovec_t *)
-        wasm_runtime_addr_app_to_native(inst, buf_iovec_addr);
+    wasi_iovec_t *iovecs = (wasi_iovec_t *)wasm_runtime_addr_app_to_native(inst, buf_iovec_addr);
     if (!iovecs)
     {
         return -5;
@@ -339,60 +274,28 @@ fd_write(wasm_exec_env_t exec_env, int32_t fd, int32_t buf_iovec_addr,
         {
             return -7;
         }
-        const uint8_t *ptr = (const uint8_t *)
-            wasm_runtime_addr_app_to_native(inst, base);
+        const uint8_t *ptr = (const uint8_t *)wasm_runtime_addr_app_to_native(inst, base);
         if (!ptr)
         {
             return -8;
         }
-        log_ring_append(ptr, (size_t)len);
+        if (log_append(ptr, (uint32_t)len) != 0)
+        {
+            return -9;
+        }
         total_written += (uint32_t)len;
     }
 
     if (!wasm_runtime_validate_app_addr(inst, size_addr, sizeof(uint32_t)))
     {
-        return -9;
+        return -10;
     }
-    uint32_t *nwritten_ptr = (uint32_t *)
-        wasm_runtime_addr_app_to_native(inst, size_addr);
+    uint32_t *nwritten_ptr = (uint32_t *)wasm_runtime_addr_app_to_native(inst, size_addr);
     if (!nwritten_ptr)
     {
-        return -10;
+        return -11;
     }
     *nwritten_ptr = total_written;
 
     return 0;
-}
-
-// Read-only helpers to expose ring buffer for HTTP serving
-int32_t log_get_filled(void)
-{
-    return (int32_t)s_log_filled;
-}
-
-int32_t log_read_from_oldest(uint32_t offset, uint8_t *out, uint32_t len)
-{
-    if (offset > s_log_filled)
-    {
-        return -1;
-    }
-    uint32_t can_read = (uint32_t)s_log_filled - offset;
-    if (len > can_read)
-    {
-        len = can_read;
-    }
-    if (len == 0)
-    {
-        return 0;
-    }
-    uint32_t oldest = (uint32_t)((s_log_write_pos + LOG_RING_BUF_SIZE - s_log_filled) % LOG_RING_BUF_SIZE);
-    uint32_t start = (oldest + offset) % LOG_RING_BUF_SIZE;
-    uint32_t to_end = LOG_RING_BUF_SIZE - start;
-    uint32_t chunk1 = len < to_end ? len : to_end;
-    memcpy(out, s_log_ring + start, chunk1);
-    if (chunk1 < len)
-    {
-        memcpy(out + chunk1, s_log_ring, len - chunk1);
-    }
-    return (int32_t)len;
 }
