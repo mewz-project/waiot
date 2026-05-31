@@ -1,7 +1,0 @@
-menu "Waiot Features"
-
-config USE_TFLM
-    bool "Enable WASI-NN with TensorFlow Lite Micro"
-    default y
-
-endmenu
