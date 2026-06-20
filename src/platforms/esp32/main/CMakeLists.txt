@@ -8,6 +8,7 @@ set(SRCS
     "esp_http.c"
     "wasi.c"
     "platform_wamr.c"
+    "platform_thread.c"
     "log.c"
     "config.c"
     "${CORE_DIR}/http.c"

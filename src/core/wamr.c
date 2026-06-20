@@ -1,9 +1,9 @@
 #include "wamr.h"
 
+#include "platform_thread.h"
 #include "wasi.h"
 #include "wasm_export.h"
 
-#include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,11 +17,12 @@ static uint8_t *g_uploaded_data = NULL;
 static size_t g_uploaded_size = 0;
 
 static wasm_module_inst_t wasm_module_inst = NULL;
-static pthread_t thread_wamr;
+static waiot_thread_t thread_wamr = {0};
 
 static atomic_bool g_wamr_thread_running = ATOMIC_VAR_INIT(false);
 static atomic_bool g_wamr_thread_joined = ATOMIC_VAR_INIT(true);
-static pthread_mutex_t g_wamr_thread_mu = PTHREAD_MUTEX_INITIALIZER;
+static waiot_mutex_t g_wamr_thread_mu = {0};
+static atomic_bool g_wamr_thread_mu_initialized = ATOMIC_VAR_INIT(false);
 
 static void *g_malloc_func = NULL;
 static void *g_realloc_func = NULL;
@@ -55,6 +56,23 @@ static NativeSymbol wasi_snapshot_preview1_syms[] = {
     {"fd_write", fd_write, "(iiii)i", NULL},
 };
 
+static void ensure_thread_primitives_initialized(void)
+{
+    if (atomic_load(&g_wamr_thread_mu_initialized))
+    {
+        return;
+    }
+
+    if (waiot_mutex_init(&g_wamr_thread_mu) == 0)
+    {
+        atomic_store(&g_wamr_thread_mu_initialized, true);
+    }
+    else
+    {
+        printf("Failed to initialize WAMR mutex.\n");
+    }
+}
+
 void __attribute__((weak)) waiot_platform_register_extra_natives(void)
 {
 }
@@ -73,6 +91,8 @@ void wamr_set_allocator(void *malloc_func, void *realloc_func, void *free_func)
 void init_wamr(void)
 {
     RuntimeInitArgs init_args;
+
+    ensure_thread_primitives_initialized();
 
     memset(&init_args, 0, sizeof(RuntimeInitArgs));
 #if WASM_ENABLE_GLOBAL_HEAP_POOL == 0
@@ -131,6 +151,8 @@ void init_wamr(void)
 
 int wamr_set_wasm_binary(const uint8_t *data, size_t size)
 {
+    ensure_thread_primitives_initialized();
+
     if (!data || size == 0)
     {
         return -1;
@@ -143,10 +165,10 @@ int wamr_set_wasm_binary(const uint8_t *data, size_t size)
     }
     memcpy(buf, data, size);
 
-    pthread_mutex_lock(&g_wamr_thread_mu);
+    waiot_mutex_lock(&g_wamr_thread_mu);
     if (is_wasm_instance_running())
     {
-        pthread_mutex_unlock(&g_wamr_thread_mu);
+        waiot_mutex_unlock(&g_wamr_thread_mu);
         free(buf);
         return -2;
     }
@@ -154,7 +176,7 @@ int wamr_set_wasm_binary(const uint8_t *data, size_t size)
     free(g_uploaded_data);
     g_uploaded_data = buf;
     g_uploaded_size = size;
-    pthread_mutex_unlock(&g_wamr_thread_mu);
+    waiot_mutex_unlock(&g_wamr_thread_mu);
     return 0;
 }
 
@@ -171,11 +193,11 @@ static void *run_wamr(void *arg)
 
     waiot_platform_print_memory_info();
 
-    pthread_mutex_lock(&g_wamr_thread_mu);
+    waiot_mutex_lock(&g_wamr_thread_mu);
     if (!g_uploaded_data || g_uploaded_size == 0)
     {
         printf("No Wasm binary uploaded\n");
-        pthread_mutex_unlock(&g_wamr_thread_mu);
+        waiot_mutex_unlock(&g_wamr_thread_mu);
         goto done;
     }
     wasm_file_buf_size = (unsigned)g_uploaded_size;
@@ -184,11 +206,11 @@ static void *run_wamr(void *arg)
     {
         printf("Failed allocating %d bytes for Wasm binary\n",
                (int)g_uploaded_size);
-        pthread_mutex_unlock(&g_wamr_thread_mu);
+        waiot_mutex_unlock(&g_wamr_thread_mu);
         goto done;
     }
     memcpy(wasm_file_buf, g_uploaded_data, g_uploaded_size);
-    pthread_mutex_unlock(&g_wamr_thread_mu);
+    waiot_mutex_unlock(&g_wamr_thread_mu);
 
     if (!(wasm_module = wasm_runtime_load(wasm_file_buf, wasm_file_buf_size,
                                           error_buf, sizeof(error_buf))))
@@ -248,10 +270,12 @@ done:
 
 void stop_current_wasm_instance(void)
 {
-    pthread_t t_for_join = 0;
+    ensure_thread_primitives_initialized();
+
+    waiot_thread_t t_for_join = {0};
     bool need_join = false;
 
-    pthread_mutex_lock(&g_wamr_thread_mu);
+    waiot_mutex_lock(&g_wamr_thread_mu);
     if (wasm_module_inst)
     {
         wasm_runtime_terminate(wasm_module_inst);
@@ -263,11 +287,11 @@ void stop_current_wasm_instance(void)
         need_join = true;
         atomic_store(&g_wamr_thread_joined, true);
     }
-    pthread_mutex_unlock(&g_wamr_thread_mu);
+    waiot_mutex_unlock(&g_wamr_thread_mu);
 
     if (need_join)
     {
-        pthread_join(t_for_join, NULL);
+        waiot_thread_join(&t_for_join);
     }
 
     waiot_platform_print_memory_info();
@@ -275,27 +299,25 @@ void stop_current_wasm_instance(void)
 
 void launch_new_wasm_instance(void)
 {
-    pthread_attr_t tattr;
-    pthread_attr_init(&tattr);
-    pthread_attr_setstacksize(&tattr, IWASM_MAIN_STACK_SIZE);
+    ensure_thread_primitives_initialized();
 
-    pthread_mutex_lock(&g_wamr_thread_mu);
+    waiot_mutex_lock(&g_wamr_thread_mu);
     if (!atomic_load(&g_wamr_thread_running) && !atomic_load(&g_wamr_thread_joined))
     {
-        pthread_join(thread_wamr, NULL);
+        waiot_thread_join(&thread_wamr);
         atomic_store(&g_wamr_thread_joined, true);
     }
 
     atomic_store(&g_wamr_thread_joined, false);
-    int res = pthread_create(&thread_wamr, &tattr, run_wamr, NULL);
+    int res = waiot_thread_create(&thread_wamr, IWASM_MAIN_STACK_SIZE,
+                                  run_wamr, NULL);
     if (res != 0)
     {
         printf("Failed to create WAMR thread: %d\n", res);
         atomic_store(&g_wamr_thread_joined, true);
     }
 
-    pthread_mutex_unlock(&g_wamr_thread_mu);
-    pthread_attr_destroy(&tattr);
+    waiot_mutex_unlock(&g_wamr_thread_mu);
 }
 
 bool is_wasm_instance_running(void)
