@@ -39,7 +39,7 @@ add_executable(${CMAKE_PROJECT_NAME})
 # Include mx-generated
 include("mx-generated.cmake")
 
-set(WAMR_ROOT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../wasm-micro-runtime)
+set(WAMR_ROOT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../wasm-micro-runtime-stm)
 set(WAMR_BUILD_PLATFORM stm32-freertos)
 set(WAMR_BUILD_TARGET THUMB_VFP)
 set(WAMR_BUILD_INTERP 1)
@@ -97,7 +97,6 @@ list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
 if((CMAKE_C_STANDARD EQUAL 90) OR (CMAKE_C_STANDARD EQUAL 99))
     message(ERROR "Generated code requires C11 or higher")
 endif()
-
 
 
 
