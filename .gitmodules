@@ -1,3 +1,6 @@
 [submodule "wasm-micro-runtime"]
 	path = wasm-micro-runtime
 	url = git@github.com:bytecodealliance/wasm-micro-runtime.git
+[submodule "wasm-micro-runtime-stm"]
+	path = wasm-micro-runtime-stm
+	url = git@github.com:mewz-project/wasm-micro-runtime.git
