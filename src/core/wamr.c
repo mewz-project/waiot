@@ -13,6 +13,18 @@
 #define IWASM_MAIN_STACK_SIZE 8192
 #endif
 
+#if WASM_ENABLE_GLOBAL_HEAP_POOL != 0
+#ifndef WAIOT_WAMR_GLOBAL_HEAP_SIZE
+#ifdef WASM_GLOBAL_HEAP_SIZE
+#define WAIOT_WAMR_GLOBAL_HEAP_SIZE WASM_GLOBAL_HEAP_SIZE
+#else
+#define WAIOT_WAMR_GLOBAL_HEAP_SIZE (64 * 1024)
+#endif
+#endif
+static uint8_t g_wamr_global_heap[WAIOT_WAMR_GLOBAL_HEAP_SIZE]
+    __attribute__((aligned(8)));
+#endif
+
 static uint8_t *g_uploaded_data = NULL;
 static size_t g_uploaded_size = 0;
 
@@ -101,7 +113,9 @@ void init_wamr(void)
     init_args.mem_alloc_option.allocator.realloc_func = g_realloc_func ? g_realloc_func : (void *)realloc;
     init_args.mem_alloc_option.allocator.free_func = g_free_func ? g_free_func : (void *)free;
 #else
-#error The usage of a global heap pool is not implemented yet.
+    init_args.mem_alloc_type = Alloc_With_Pool;
+    init_args.mem_alloc_option.pool.heap_buf = g_wamr_global_heap;
+    init_args.mem_alloc_option.pool.heap_size = sizeof(g_wamr_global_heap);
 #endif
 
     if (!wasm_runtime_full_init(&init_args))
