@@ -80,11 +80,13 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/wasm_test_module.c
     Core/Src/stm_waiot_entry.c
     Core/Src/stm_wamr_config.c
+    Core/Src/stm_wasi_gpio.c
+    Core/Src/stm_wasi_i2c.c
+    Core/Src/stm_wasi_pwm.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../common/log.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../common/platform_thread.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../wasi/waiot_freertos_delay.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../wasi/waiot_freertos_fd.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../wasi/waiot_freertos_wasi_stubs.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../../core/pinmap.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../../core/wamr.c
     ${WAMR_RUNTIME_LIB_SOURCE}
@@ -107,4 +109,3 @@ list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
 if((CMAKE_C_STANDARD EQUAL 90) OR (CMAKE_C_STANDARD EQUAL 99))
     message(ERROR "Generated code requires C11 or higher")
 endif()
-
