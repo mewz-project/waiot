@@ -56,6 +56,30 @@ set(WAMR_BUILD_GLOBAL_HEAP_POOL 1)
 set(WAMR_BUILD_GLOBAL_HEAP_SIZE 65536)
 include("${WAMR_ROOT_DIR}/build-scripts/runtime_lib.cmake")
 
+set(WAIOT_STM_WASM_FILE
+    "${CMAKE_CURRENT_SOURCE_DIR}/wasm/app.wasm"
+    CACHE FILEPATH "Wasm module embedded into the STM NonSecure image")
+set(WAIOT_EMBEDDED_WASM_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set(WAIOT_EMBEDDED_WASM_C "${WAIOT_EMBEDDED_WASM_DIR}/embedded_wasm.c")
+set(WAIOT_EMBEDDED_WASM_H "${WAIOT_EMBEDDED_WASM_DIR}/embedded_wasm.h")
+
+add_custom_command(
+    OUTPUT
+        "${WAIOT_EMBEDDED_WASM_C}"
+        "${WAIOT_EMBEDDED_WASM_H}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${WAIOT_EMBEDDED_WASM_DIR}"
+    COMMAND ${CMAKE_COMMAND}
+        -DINPUT=${WAIOT_STM_WASM_FILE}
+        -DOUTPUT_C=${WAIOT_EMBEDDED_WASM_C}
+        -DOUTPUT_H=${WAIOT_EMBEDDED_WASM_H}
+        -DSYMBOL=g_waiot_embedded_wasm
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbedWasm.cmake"
+    DEPENDS
+        "${WAIOT_STM_WASM_FILE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbedWasm.cmake"
+    COMMENT "Embedding ${WAIOT_STM_WASM_FILE}"
+    VERBATIM
+)
 
 # In order to use CMake for cross-compiling
 set(CMAKE_CXX_COMPILER_FORCED "true")
@@ -72,12 +96,13 @@ enable_language(C ASM)
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../../core
+    ${WAIOT_EMBEDDED_WASM_DIR}
 )
 
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
-    Core/Src/wasm_test_module.c
+    ${WAIOT_EMBEDDED_WASM_C}
     Core/Src/stm_waiot_entry.c
     Core/Src/stm_wamr_config.c
     Core/Src/stm_wasi_gpio.c
