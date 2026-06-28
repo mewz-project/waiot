@@ -36,5 +36,15 @@ int32_t pwm_update_duty(wasm_exec_env_t exec_env, int32_t channel,
 int32_t pwm_set_frequency(wasm_exec_env_t exec_env, int32_t channel,
                           int32_t freq, int32_t speed_mode);
 
+int32_t waiot_spi_bus_init(wasm_exec_env_t exec_env, int32_t host,
+                           int32_t mosi_gpio, int32_t miso_gpio,
+                           int32_t sclk_gpio, int32_t max_transfer_sz);
+int32_t waiot_spi_device_add(wasm_exec_env_t exec_env, int32_t host,
+                             int32_t cs_gpio, int32_t mode, int32_t freq_hz);
+int32_t waiot_spi_acquire(wasm_exec_env_t exec_env, int32_t device_handle);
+int32_t waiot_spi_release(wasm_exec_env_t exec_env, int32_t device_handle);
+int32_t waiot_spi_transfer(wasm_exec_env_t exec_env, int32_t device_handle,
+                           int32_t tx_ptr, int32_t rx_ptr, int32_t len);
+
 int32_t fd_write(wasm_exec_env_t exec_env, int32_t fd, int32_t buf_iovec_addr,
                  int32_t vec_len, int32_t size_addr);

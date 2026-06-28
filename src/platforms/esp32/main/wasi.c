@@ -6,6 +6,7 @@
 #include "driver/gpio.h"
 #include "driver/i2c.h"
 #include "driver/ledc.h"
+#include "driver/spi_master.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -269,6 +270,176 @@ int32_t pwm_set_frequency(wasm_exec_env_t exec_env, int32_t channel,
              channel, freq, speed_mode);
     ESP_ERROR_CHECK(ledc_set_freq((ledc_mode_t)speed_mode, channel, freq));
     return 0;
+}
+
+#define WASI_MAX_SPI_HOSTS   3  /* SPI1_HOST, SPI2_HOST, SPI3_HOST */
+#define WASI_MAX_SPI_DEVICES 4
+
+typedef struct
+{
+    bool used;
+    spi_device_handle_t handle;
+} wasi_spi_device_t;
+
+static bool s_spi_bus_initialized[WASI_MAX_SPI_HOSTS];
+static wasi_spi_device_t s_spi_devices[WASI_MAX_SPI_DEVICES];
+
+static int32_t alloc_spi_device(spi_device_handle_t handle)
+{
+    for (int i = 0; i < WASI_MAX_SPI_DEVICES; i++)
+    {
+        if (!s_spi_devices[i].used)
+        {
+            s_spi_devices[i].used = true;
+            s_spi_devices[i].handle = handle;
+            return (int32_t)i;
+        }
+    }
+    return -1;
+}
+
+static spi_device_handle_t get_spi_device(int32_t h)
+{
+    if (h < 0 || h >= WASI_MAX_SPI_DEVICES || !s_spi_devices[h].used)
+    {
+        return NULL;
+    }
+    return s_spi_devices[h].handle;
+}
+
+int32_t waiot_spi_bus_init(wasm_exec_env_t exec_env, int32_t host,
+                           int32_t mosi_gpio, int32_t miso_gpio,
+                           int32_t sclk_gpio, int32_t max_transfer_sz)
+{
+    ESP_LOGI("wasi_spi", "spi_bus_init: host=%d, mosi=%d, miso=%d, sclk=%d, max_sz=%d",
+             host, mosi_gpio, miso_gpio, sclk_gpio, max_transfer_sz);
+    if (host < 0 || host >= WASI_MAX_SPI_HOSTS)
+    {
+        ESP_LOGE("wasi_spi", "spi_bus_init: invalid host %d", host);
+        return -1;
+    }
+    if (s_spi_bus_initialized[host])
+    {
+        ESP_LOGI("wasi_spi", "spi_bus_init: host=%d already initialized, skipping", host);
+        return 0;
+    }
+    spi_bus_config_t bus_cfg = {
+        .mosi_io_num = map_pin(mosi_gpio),
+        .miso_io_num = map_pin(miso_gpio),
+        .sclk_io_num = map_pin(sclk_gpio),
+        .quadwp_io_num = -1,
+        .quadhd_io_num = -1,
+        .max_transfer_sz = max_transfer_sz,
+    };
+    esp_err_t err = spi_bus_initialize((spi_host_device_t)host, &bus_cfg, SPI_DMA_CH_AUTO);
+    if (err != ESP_OK)
+    {
+        ESP_LOGE("wasi_spi", "spi_bus_initialize failed: %d", err);
+        return -1;
+    }
+    s_spi_bus_initialized[host] = true;
+    return 0;
+}
+
+int32_t waiot_spi_device_add(wasm_exec_env_t exec_env, int32_t host,
+                             int32_t cs_gpio, int32_t mode, int32_t freq_hz)
+{
+    ESP_LOGI("wasi_spi", "spi_device_add: host=%d, cs=%d, mode=%d, freq=%d",
+             host, cs_gpio, mode, freq_hz);
+    spi_device_interface_config_t dev_cfg = {
+        .clock_speed_hz = freq_hz,
+        .mode = (uint8_t)mode,
+        .spics_io_num = map_pin(cs_gpio),
+        .queue_size = 7,
+    };
+    spi_device_handle_t dev_handle;
+    esp_err_t err = spi_bus_add_device((spi_host_device_t)host, &dev_cfg, &dev_handle);
+    if (err != ESP_OK)
+    {
+        ESP_LOGE("wasi_spi", "spi_bus_add_device failed: %d", err);
+        return -1;
+    }
+    int32_t idx = alloc_spi_device(dev_handle);
+    if (idx < 0)
+    {
+        ESP_LOGE("wasi_spi", "No free SPI device slots");
+        spi_bus_remove_device(dev_handle);
+        return -1;
+    }
+    ESP_LOGI("wasi_spi", "spi_device_add: assigned handle=%d", idx);
+    return idx;
+}
+
+int32_t waiot_spi_acquire(wasm_exec_env_t exec_env, int32_t device_handle)
+{
+    spi_device_handle_t handle = get_spi_device(device_handle);
+    if (!handle)
+    {
+        ESP_LOGE("wasi_spi", "spi_acquire: invalid handle %d", device_handle);
+        return -1;
+    }
+    esp_err_t err = spi_device_acquire_bus(handle, portMAX_DELAY);
+    return (err == ESP_OK) ? 0 : -1;
+}
+
+int32_t waiot_spi_release(wasm_exec_env_t exec_env, int32_t device_handle)
+{
+    spi_device_handle_t handle = get_spi_device(device_handle);
+    if (!handle)
+    {
+        ESP_LOGE("wasi_spi", "spi_release: invalid handle %d", device_handle);
+        return -1;
+    }
+    spi_device_release_bus(handle);
+    return 0;
+}
+
+int32_t waiot_spi_transfer(wasm_exec_env_t exec_env, int32_t device_handle,
+                           int32_t tx_ptr, int32_t rx_ptr, int32_t len)
+{
+    spi_device_handle_t handle = get_spi_device(device_handle);
+    if (!handle)
+    {
+        ESP_LOGE("wasi_spi", "spi_transfer: invalid handle %d", device_handle);
+        return -1;
+    }
+
+    wasm_module_inst_t instance = wasm_runtime_get_module_inst(exec_env);
+    if (!instance)
+    {
+        ESP_LOGE("wasi_spi", "Failed to get module instance.");
+        return -1;
+    }
+
+    void *tx_buf = NULL;
+    void *rx_buf = NULL;
+
+    if (tx_ptr != 0)
+    {
+        if (!wasm_runtime_validate_app_addr(instance, tx_ptr, len))
+        {
+            ESP_LOGE("wasi_spi", "Invalid tx buffer address.");
+            return -1;
+        }
+        tx_buf = wasm_runtime_addr_app_to_native(instance, tx_ptr);
+    }
+    if (rx_ptr != 0)
+    {
+        if (!wasm_runtime_validate_app_addr(instance, rx_ptr, len))
+        {
+            ESP_LOGE("wasi_spi", "Invalid rx buffer address.");
+            return -1;
+        }
+        rx_buf = wasm_runtime_addr_app_to_native(instance, rx_ptr);
+    }
+
+    spi_transaction_t t = {
+        .length = (size_t)len * 8,
+        .tx_buffer = tx_buf,
+        .rx_buffer = rx_buf,
+    };
+    esp_err_t err = spi_device_polling_transmit(handle, &t);
+    return (err == ESP_OK) ? 0 : -1;
 }
 
 int32_t fd_write(wasm_exec_env_t exec_env, int32_t fd, int32_t buf_iovec_addr,

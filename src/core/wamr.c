@@ -52,6 +52,14 @@ static NativeSymbol pwm_syms[] = {
     {"pwm_set_frequency", pwm_set_frequency, "(iii)i", NULL},
 };
 
+static NativeSymbol spi_syms[] = {
+    {"spi_bus_init", waiot_spi_bus_init, "(iiiii)i", NULL},
+    {"spi_device_add", waiot_spi_device_add, "(iiii)i", NULL},
+    {"spi_acquire", waiot_spi_acquire, "(i)i", NULL},
+    {"spi_release", waiot_spi_release, "(i)i", NULL},
+    {"spi_transfer", waiot_spi_transfer, "(iiii)i", NULL},
+};
+
 static NativeSymbol wasi_snapshot_preview1_syms[] = {
     {"fd_write", fd_write, "(iiii)i", NULL},
 };
@@ -117,6 +125,13 @@ void init_wamr(void)
             (uint32_t)(sizeof(pwm_syms) / sizeof(NativeSymbol))))
     {
         printf("Failed to register PWM native symbols.\n");
+        return;
+    }
+    if (!wasm_runtime_register_natives(
+            "wasi:spi", spi_syms,
+            (uint32_t)(sizeof(spi_syms) / sizeof(NativeSymbol))))
+    {
+        printf("Failed to register SPI native symbols.\n");
         return;
     }
     if (!wasm_runtime_register_natives(
