@@ -13,6 +13,13 @@ int32_t waiot_i2c_master_write(wasm_exec_env_t exec_env, int32_t port,
 int32_t waiot_i2c_master_read(wasm_exec_env_t exec_env, int32_t port,
                               int32_t addr, int32_t read_buff_ptr_idx,
                               int32_t read_size, int32_t ticks_to_wait);
+int32_t waiot_i2c_master_write_read(wasm_exec_env_t exec_env, int32_t port,
+                                    int32_t addr,
+                                    int32_t write_buff_ptr_idx,
+                                    int32_t write_size,
+                                    int32_t read_buff_ptr_idx,
+                                    int32_t read_size,
+                                    int32_t ticks_to_wait);
 
 int32_t gpio_set_pin_mode(wasm_exec_env_t exec_env, int32_t pin, int32_t dir);
 int32_t gpio_read(wasm_exec_env_t exec_env, int32_t pin);
