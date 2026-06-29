@@ -74,11 +74,11 @@ int32_t waiot_i2c_driver_install(wasm_exec_env_t exec_env, int32_t port)
 }
 
 int32_t waiot_i2c_master_write(wasm_exec_env_t exec_env, int32_t port,
-                               int32_t addr, int32_t write_buff_ptr_idx,
-                               int32_t write_size, int32_t ticks_to_wait)
+                               int32_t addr, uint32_t write_buff_ptr_idx,
+                               uint32_t write_size, int32_t ticks_to_wait)
 {
-    ESP_LOGI("wasi_i2c", "i2c_master_write: port=%d, addr=0x%02x, write_buff_ptr_idx=0x%08x, write_size=%d, ticks_to_wait=%d",
-             port, addr, write_buff_ptr_idx, write_size, ticks_to_wait);
+    ESP_LOGI("wasi_i2c", "i2c_master_write: port=%d, addr=0x%02x, write_buff_ptr_idx=0x%08x, write_size=%u, ticks_to_wait=%d",
+             port, addr, (unsigned)write_buff_ptr_idx, (unsigned)write_size, ticks_to_wait);
     wasm_module_inst_t instance = wasm_runtime_get_module_inst(exec_env);
     if (!instance)
     {
@@ -101,11 +101,11 @@ int32_t waiot_i2c_master_write(wasm_exec_env_t exec_env, int32_t port,
 }
 
 int32_t waiot_i2c_master_read(wasm_exec_env_t exec_env, int32_t port,
-                              int32_t addr, int32_t read_buff_ptr_idx,
-                              int32_t read_size, int32_t ticks_to_wait)
+                              int32_t addr, uint32_t read_buff_ptr_idx,
+                              uint32_t read_size, int32_t ticks_to_wait)
 {
-    ESP_LOGI("wasi_i2c", "i2c_master_read: port=%d, addr=0x%02x, read_buff_ptr_idx=0x%08x, read_size=%d, ticks_to_wait=%d",
-             port, addr, read_buff_ptr_idx, read_size, ticks_to_wait);
+    ESP_LOGI("wasi_i2c", "i2c_master_read: port=%d, addr=0x%02x, read_buff_ptr_idx=0x%08x, read_size=%u, ticks_to_wait=%d",
+             port, addr, (unsigned)read_buff_ptr_idx, (unsigned)read_size, ticks_to_wait);
     wasm_module_inst_t instance = wasm_runtime_get_module_inst(exec_env);
     if (!instance)
     {
@@ -129,17 +129,17 @@ int32_t waiot_i2c_master_read(wasm_exec_env_t exec_env, int32_t port,
 
 int32_t waiot_i2c_master_write_read(wasm_exec_env_t exec_env, int32_t port,
                                     int32_t addr,
-                                    int32_t write_buff_ptr_idx,
-                                    int32_t write_size,
-                                    int32_t read_buff_ptr_idx,
-                                    int32_t read_size,
+                                    uint32_t write_buff_ptr_idx,
+                                    uint32_t write_size,
+                                    uint32_t read_buff_ptr_idx,
+                                    uint32_t read_size,
                                     int32_t ticks_to_wait)
 {
     ESP_LOGI("wasi_i2c", "i2c_master_write_read: port=%d, addr=0x%02x, "
-             "write_buff_ptr_idx=0x%08x, write_size=%d, "
-             "read_buff_ptr_idx=0x%08x, read_size=%d, ticks_to_wait=%d",
-             port, addr, write_buff_ptr_idx, write_size,
-             read_buff_ptr_idx, read_size, ticks_to_wait);
+             "write_buff_ptr_idx=0x%08x, write_size=%u, "
+             "read_buff_ptr_idx=0x%08x, read_size=%u, ticks_to_wait=%d",
+             port, addr, (unsigned)write_buff_ptr_idx, (unsigned)write_size,
+             (unsigned)read_buff_ptr_idx, (unsigned)read_size, ticks_to_wait);
 
     wasm_module_inst_t instance = wasm_runtime_get_module_inst(exec_env);
     if (!instance)
@@ -203,14 +203,17 @@ int32_t gpio_write(wasm_exec_env_t exec_env, int32_t pin, int32_t value)
     return (gpio_set_level(hw_pin, value ? 1 : 0) == ESP_OK) ? 0 : -1;
 }
 
-int32_t delay_ns(wasm_exec_env_t exec_env, int32_t ns)
+int32_t delay_ns(wasm_exec_env_t exec_env, uint32_t ns)
 {
-    if (ns <= 0)
+    if (ns == 0)
     {
         return 0;
     }
-    uint32_t ns_saturating_add = (ns >= INT32_MAX - 999999) ? INT32_MAX : ns + 999999;
-    uint32_t ms = ns_saturating_add / 1000000;
+    uint32_t ms = ns / 1000000;
+    if ((ns % 1000000) != 0)
+    {
+        ms++;
+    }
     vTaskDelay(pdMS_TO_TICKS(ms));
     return 0;
 }
@@ -410,20 +413,15 @@ int32_t waiot_spi_release(wasm_exec_env_t exec_env, int32_t device_handle)
 }
 
 int32_t waiot_spi_transfer(wasm_exec_env_t exec_env, int32_t device_handle,
-                           int32_t tx_ptr, int32_t rx_ptr, int32_t len)
+                           int32_t tx_ptr, int32_t rx_ptr, uint32_t len)
 {
-    if (len < 0)
-    {
-        ESP_LOGE("wasi_spi", "spi_transfer: invalid length %d", len);
-        return -1;
-    }
     if (len == 0)
     {
         return 0;
     }
-    if (len > (INT32_MAX / 8))
+    if (len > (UINT32_MAX / 8))
     {
-        ESP_LOGE("wasi_spi", "spi_transfer: len too large %d", len);
+        ESP_LOGE("wasi_spi", "spi_transfer: len too large %u", (unsigned)len);
         return -1;
     }
     if (tx_ptr == 0 && rx_ptr == 0)
@@ -451,7 +449,7 @@ int32_t waiot_spi_transfer(wasm_exec_env_t exec_env, int32_t device_handle,
 
     if (tx_ptr != 0)
     {
-        if (!wasm_runtime_validate_app_addr(instance, tx_ptr, (uint32_t)len))
+        if (!wasm_runtime_validate_app_addr(instance, tx_ptr, len))
         {
             ESP_LOGE("wasi_spi", "Invalid tx buffer address.");
             return -1;
@@ -460,7 +458,7 @@ int32_t waiot_spi_transfer(wasm_exec_env_t exec_env, int32_t device_handle,
     }
     if (rx_ptr != 0)
     {
-        if (!wasm_runtime_validate_app_addr(instance, rx_ptr, (uint32_t)len))
+        if (!wasm_runtime_validate_app_addr(instance, rx_ptr, len))
         {
             ESP_LOGE("wasi_spi", "Invalid rx buffer address.");
             return -1;
