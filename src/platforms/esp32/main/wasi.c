@@ -137,8 +137,8 @@ int32_t waiot_i2c_master_write_read(wasm_exec_env_t exec_env, int32_t port,
     ESP_LOGI("wasi_i2c", "i2c_master_write_read: port=%d, addr=0x%02x, "
              "write_buff_ptr_idx=0x%08x, write_size=%d, "
              "read_buff_ptr_idx=0x%08x, read_size=%d, ticks_to_wait=%d",
-             port, addr, write_buff_ptr_idx, write_size,
-             read_buff_ptr_idx, read_size, ticks_to_wait);
+             port, (unsigned)(uint8_t)addr, (unsigned)write_buff_ptr_idx, write_size,
+             (unsigned)read_buff_ptr_idx, read_size, ticks_to_wait);
 
     wasm_module_inst_t instance = wasm_runtime_get_module_inst(exec_env);
     if (!instance)
