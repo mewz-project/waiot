@@ -284,6 +284,11 @@ typedef struct
 static bool s_spi_bus_initialized[WASI_MAX_SPI_HOSTS];
 static wasi_spi_device_t s_spi_devices[WASI_MAX_SPI_DEVICES];
 
+static bool is_valid_spi_host(int32_t host)
+{
+    return host >= 0 && host < WASI_MAX_SPI_HOSTS;
+}
+
 static int32_t alloc_spi_device(spi_device_handle_t handle)
 {
     for (int i = 0; i < WASI_MAX_SPI_DEVICES; i++)
@@ -313,7 +318,7 @@ int32_t waiot_spi_bus_init(wasm_exec_env_t exec_env, int32_t host,
 {
     ESP_LOGI("wasi_spi", "spi_bus_init: host=%d, mosi=%d, miso=%d, sclk=%d, max_sz=%d",
              host, mosi_gpio, miso_gpio, sclk_gpio, max_transfer_sz);
-    if (host < 0 || host >= WASI_MAX_SPI_HOSTS)
+    if (!is_valid_spi_host(host))
     {
         ESP_LOGE("wasi_spi", "spi_bus_init: invalid host %d", host);
         return -1;
@@ -346,6 +351,16 @@ int32_t waiot_spi_device_add(wasm_exec_env_t exec_env, int32_t host,
 {
     ESP_LOGI("wasi_spi", "spi_device_add: host=%d, cs=%d, mode=%d, freq=%d",
              host, cs_gpio, mode, freq_hz);
+    if (!is_valid_spi_host(host))
+    {
+        ESP_LOGE("wasi_spi", "spi_device_add: invalid host %d", host);
+        return -1;
+    }
+    if (!s_spi_bus_initialized[host])
+    {
+        ESP_LOGE("wasi_spi", "spi_device_add: host=%d is not initialized", host);
+        return -1;
+    }
     spi_device_interface_config_t dev_cfg = {
         .clock_speed_hz = freq_hz,
         .mode = (uint8_t)mode,
@@ -397,6 +412,26 @@ int32_t waiot_spi_release(wasm_exec_env_t exec_env, int32_t device_handle)
 int32_t waiot_spi_transfer(wasm_exec_env_t exec_env, int32_t device_handle,
                            int32_t tx_ptr, int32_t rx_ptr, int32_t len)
 {
+    if (len < 0)
+    {
+        ESP_LOGE("wasi_spi", "spi_transfer: invalid length %d", len);
+        return -1;
+    }
+    if (len == 0)
+    {
+        return 0;
+    }
+    if (len > (INT32_MAX / 8))
+    {
+        ESP_LOGE("wasi_spi", "spi_transfer: len too large %d", len);
+        return -1;
+    }
+    if (tx_ptr == 0 && rx_ptr == 0)
+    {
+        ESP_LOGE("wasi_spi", "spi_transfer: both tx_ptr and rx_ptr are 0");
+        return -1;
+    }
+
     spi_device_handle_t handle = get_spi_device(device_handle);
     if (!handle)
     {
@@ -416,7 +451,7 @@ int32_t waiot_spi_transfer(wasm_exec_env_t exec_env, int32_t device_handle,
 
     if (tx_ptr != 0)
     {
-        if (!wasm_runtime_validate_app_addr(instance, tx_ptr, len))
+        if (!wasm_runtime_validate_app_addr(instance, tx_ptr, (uint32_t)len))
         {
             ESP_LOGE("wasi_spi", "Invalid tx buffer address.");
             return -1;
@@ -425,7 +460,7 @@ int32_t waiot_spi_transfer(wasm_exec_env_t exec_env, int32_t device_handle,
     }
     if (rx_ptr != 0)
     {
-        if (!wasm_runtime_validate_app_addr(instance, rx_ptr, len))
+        if (!wasm_runtime_validate_app_addr(instance, rx_ptr, (uint32_t)len))
         {
             ESP_LOGE("wasi_spi", "Invalid rx buffer address.");
             return -1;
@@ -434,7 +469,8 @@ int32_t waiot_spi_transfer(wasm_exec_env_t exec_env, int32_t device_handle,
     }
 
     spi_transaction_t t = {
-        .length = (size_t)len * 8,
+        .length = tx_buf ? (size_t)len * 8 : 0,
+        .rxlength = rx_buf ? (size_t)len * 8 : 0,
         .tx_buffer = tx_buf,
         .rx_buffer = rx_buf,
     };
