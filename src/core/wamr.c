@@ -32,6 +32,7 @@ static NativeSymbol i2c_syms[] = {
     {"i2c_driver_install", waiot_i2c_driver_install, "(i)i", NULL},
     {"i2c_master_write", waiot_i2c_master_write, "(iiiii)i", NULL},
     {"i2c_master_read", waiot_i2c_master_read, "(iiiii)i", NULL},
+    {"i2c_master_write_read", waiot_i2c_master_write_read, "(iiiiiii)i", NULL},
 };
 
 static NativeSymbol gpio_syms[] = {

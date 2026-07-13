@@ -126,6 +126,51 @@ int32_t waiot_i2c_master_read(wasm_exec_env_t exec_env, int32_t port,
     return (err == ESP_OK) ? 0 : -1;
 }
 
+int32_t waiot_i2c_master_write_read(wasm_exec_env_t exec_env, int32_t port,
+                                    int32_t addr,
+                                    int32_t write_buff_ptr_idx,
+                                    int32_t write_size,
+                                    int32_t read_buff_ptr_idx,
+                                    int32_t read_size,
+                                    int32_t ticks_to_wait)
+{
+    ESP_LOGI("wasi_i2c", "i2c_master_write_read: port=%d, addr=0x%02x, "
+             "write_buff_ptr_idx=0x%08x, write_size=%d, "
+             "read_buff_ptr_idx=0x%08x, read_size=%d, ticks_to_wait=%d",
+             port, (unsigned)(uint8_t)addr, (unsigned)write_buff_ptr_idx, write_size,
+             (unsigned)read_buff_ptr_idx, read_size, ticks_to_wait);
+
+    wasm_module_inst_t instance = wasm_runtime_get_module_inst(exec_env);
+    if (!instance)
+    {
+        ESP_LOGE("wasi_i2c", "Failed to get module instance.");
+        return -1;
+    }
+
+    if (!wasm_runtime_validate_app_addr(instance, write_buff_ptr_idx, write_size))
+    {
+        ESP_LOGE("wasi_i2c", "Invalid write buffer address.");
+        return -1;
+    }
+
+    if (!wasm_runtime_validate_app_addr(instance, read_buff_ptr_idx, read_size))
+    {
+        ESP_LOGE("wasi_i2c", "Invalid read buffer address.");
+        return -1;
+    }
+
+    char *write_buff = (char *)wasm_runtime_addr_app_to_native(instance, write_buff_ptr_idx);
+    char *read_buff  = (char *)wasm_runtime_addr_app_to_native(instance, read_buff_ptr_idx);
+
+    esp_err_t err = i2c_master_write_read_device(
+        (i2c_port_t)port, (uint8_t)addr,
+        (const uint8_t *)write_buff, (size_t)write_size,
+        (uint8_t *)read_buff,        (size_t)read_size,
+        (TickType_t)ticks_to_wait);
+
+    return (err == ESP_OK) ? 0 : -1;
+}
+
 int32_t gpio_set_pin_mode(wasm_exec_env_t exec_env, int32_t pin, int32_t dir)
 {
     int32_t hw_pin = map_pin(pin);
