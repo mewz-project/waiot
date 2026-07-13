@@ -8,7 +8,7 @@ waiot enables running WebAssembly (Wasm) workloads on IoT devices.
 - `src/platforms`: Device-specific platform adapters and build projects
 
 # Getting Started
-## Writing Application
+## Writing and Building Wasm Applications
 ```
 cd src/embedded-hal-wasm
 cargo build --example digital --target wasm32-wasi --release
